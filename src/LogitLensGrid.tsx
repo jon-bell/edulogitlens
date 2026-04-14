@@ -14,6 +14,58 @@ export interface LogitLensData {
   data: LogitCell[][];
 }
 
+/**
+ * Central color theme — change colors here to update the entire component.
+ */
+const THEME = {
+  // Heatmap base color (nnsightful default)
+  heatmapBase: { r: 0x88, g: 0x44, b: 0xff, hex: '#8844ff' },
+  heatmapBaseHover: '#7733ee',
+
+  // Primary accent (buttons, progress bars, active elements)
+  primary: '#8844ff',
+  primaryHover: '#7733ee',
+  primaryLight: '#bfdbfe',
+
+  // Text
+  textDark: '#1e3a8a',
+  textBody: '#374151',
+  textMuted: '#6b7280',
+  textOnDark: '#fff',
+  textOnLight: '#333',
+
+  // Rank change indicators
+  rankUp: '#16a34a',
+  rankDown: '#dc2626',
+  rankNew: '#8844ff',
+
+  // Greyed-out cells
+  greyedBg: '#9ca3af',
+  greyedOpacity: 0.4,
+
+  // UI chrome
+  borderLight: '#e5e7eb',
+  borderMedium: '#d1d5db',
+  disabledBg: '#d1d5db',
+  surfaceWhite: '#fff',
+  surfacePanel: '#f8faff',
+  overlayBg: 'rgba(0, 0, 0, 0.4)',
+  modalShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+  buttonShadow: (hex: string, opacity: number) => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `0 2px 4px rgba(${r}, ${g}, ${b}, ${opacity})`;
+  },
+
+  // Token card in generation view — derived from heatmap base
+  tokenCardBg: (prob: number) => `rgba(136, 68, 255, ${0.15 + prob * 0.45})`,
+  tokenCardBorder: 'rgba(136, 68, 255, 0.35)',
+
+  // Sidebar probability text
+  probText: '#4b5563',
+} as const;
+
 interface LogitLensGridProps {
   data: LogitLensData;
 }
@@ -81,8 +133,11 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
   const headerRowHeight = 28;
 
   const getBackgroundColor = (prob: number) => {
-    const opacity = prob;
-    return `rgba(30, 64, 175, ${opacity})`;
+    const { r, g, b } = THEME.heatmapBase;
+    const rv = Math.round(255 - (255 - r) * prob);
+    const gv = Math.round(255 - (255 - g) * prob);
+    const bv = Math.round(255 - (255 - b) * prob);
+    return `rgb(${rv},${gv},${bv})`;
   };
 
   const isInHighlightRect = (row: number, col: number, targetRow: number, targetCol: number) => {
@@ -103,26 +158,45 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
     return selectedCell !== null;
   };
 
+  const getTextColor = (prob: number) => {
+    return prob < 0.5 ? THEME.textOnLight : THEME.textOnDark;
+  };
+
   const getCellStyle = (row: number, col: number, prob: number) => {
     const isGreyed = shouldBeGreyed() && !(selectedCell && isInHighlightRect(row, col, selectedCell.row, selectedCell.col));
-    
+
     if (isGreyed) {
       return {
-        backgroundColor: '#9ca3af',
-        opacity: 0.4,
+        backgroundColor: THEME.greyedBg,
+        opacity: THEME.greyedOpacity,
       };
     }
-    
+
+    if (shouldShowRedBox(row, col)) {
+      // Blend cell color with red tint for hover highlight
+      const { r: br, g: bg, b: bb } = THEME.heatmapBase;
+      const r = Math.round(255 - (255 - br) * prob);
+      const g = Math.round(255 - (255 - bg) * prob);
+      const b = Math.round(255 - (255 - bb) * prob);
+      // Mix 30% red into the cell color
+      const tr = Math.min(255, Math.round(r * 0.7 + 255 * 0.3));
+      const tg = Math.round(g * 0.7);
+      const tb = Math.round(b * 0.7);
+      return {
+        backgroundColor: `rgb(${tr},${tg},${tb})`,
+      };
+    }
+
     return {
       backgroundColor: getBackgroundColor(prob),
     };
   };
 
   return (
-    <div className="w-full h-full flex flex-col gap-4">
+    <div className="w-full h-full flex flex-col gap-4 overflow-hidden relative">
       {/* Controls */}
-      <div className="flex items-center justify-between gap-4 px-4 py-3 bg-gray-50 rounded-lg border border-gray-200 flex-shrink-0">
-        <div className="flex items-center gap-6">
+      <div className="flex items-center justify-between gap-4 px-4 py-3 bg-gray-50 rounded-lg border border-gray-200 flex-shrink-0 min-w-0 overflow-hidden">
+        <div className="flex items-center gap-6 min-w-0 flex-shrink-1">
           {/* Zoom controls */}
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-700">Zoom:</span>
@@ -183,23 +257,34 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
           </div>
         </div>
 
-        <div className="text-sm text-gray-600">
+        <div className="text-sm text-gray-600 flex-shrink-0 whitespace-nowrap">
           Showing {filteredTokens.length} tokens × {filteredLayers.length} layers
         </div>
       </div>
 
       {/* Main content area with grid and side panel */}
-      <div className="flex-1 flex gap-4 min-h-0">
+      <div className="flex-1 flex gap-4 min-h-0 min-w-0 overflow-hidden">
         {/* Grid with smooth scrolling */}
-        <div className="flex-1 overflow-auto p-6 min-h-0" style={{ scrollBehavior: 'smooth' }}>
+        <div className="flex-1 overflow-auto p-6 min-h-0 min-w-0" style={{ scrollBehavior: 'smooth' }}>
           <div className="relative inline-block min-w-full">
-            {/* Y-axis "Tokens" label - separate from grid */}
-            <div className="absolute -left-12 top-1/2 -translate-y-1/2 -rotate-90 text-sm font-medium whitespace-nowrap">
-              Tokens
+            {/* Y-axis "Input Tokens" label - separate from grid */}
+            <div className="absolute text-sm font-medium whitespace-nowrap" style={{ left: -16, top: '50%', transform: 'translateX(-50%) translateY(-50%) rotate(-90deg)' }}>
+              Input Tokens
             </div>
 
             {/* Layout: axes separate from heatmap so cells align exactly; margin from widget.css */}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {/* X-axis "Layer" label - centered above cells */}
+              <div
+                className="text-center text-sm font-medium mb-1"
+                style={{
+                  marginLeft: labelColWidth + 12,
+                  width: filteredLayers.length * cellSize,
+                }}
+              >
+                Layer
+              </div>
+
               {/* X-axis: layer numbers row only (same column widths as heatmap) */}
               <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: 8 }}>
                 <div style={{ width: labelColWidth, flexShrink: 0 }} />
@@ -289,8 +374,8 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                           onClick={() => handleCellClick(displayRowIdx, displayColIdx)}
                         >
                           <div
-                            className="logitlens-heatmap-cell-token absolute inset-0 flex items-center justify-center font-medium text-white"
-                            style={{ fontSize: Math.max(12, 12 * zoomLevel) }}
+                            className="logitlens-heatmap-cell-token absolute inset-0 flex items-center justify-center font-medium"
+                            style={{ fontSize: Math.max(12, 12 * zoomLevel), color: getTextColor(cellData.probability) }}
                           >
                             {cellData.token}
                           </div>
@@ -319,9 +404,31 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                 </div>
               </div>
 
-              {/* X-axis "Layer" label - separate row below heatmap, centered under cells */}
+              {/* X-axis: layer numbers row below heatmap (mirrors top row) */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', marginTop: 8 }}>
+                <div style={{ width: labelColWidth, flexShrink: 0 }} />
+                <div style={{ display: 'flex' }}>
+                  {filteredLayers.map((layer) => (
+                    <div
+                      key={`bottom-${layer}`}
+                      style={{
+                        width: cellSize,
+                        height: headerRowHeight,
+                        fontSize: Math.max(10, 10 * zoomLevel),
+                        textAlign: 'center',
+                        flexShrink: 0,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {layer}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* X-axis "Layer" label - centered under cells */}
               <div
-                className="text-center text-sm font-medium mt-3"
+                className="text-center text-sm font-medium mt-1"
                 style={{
                   marginLeft: labelColWidth + 12,
                   width: filteredLayers.length * cellSize,
@@ -331,96 +438,59 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
               </div>
             </div>
 
-            {/* Token Generation View Below Grid */}
-            <AnimatePresence>
-              {(() => {
-                // #region agent log
-                if (typeof fetch !== 'undefined') { fetch('http://127.0.0.1:7244/ingest/fc915240-872e-4c1a-aef6-bf81d338a109',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LogitLensGrid.tsx:gen-panel',message:'Generation panel visibility',data:{showGeneration,isValidSelection:!!isValidSelection,selectedCell:selectedCell??null,filteredLayerAtCol:selectedCell!=null?filteredLayerIndices[selectedCell.col]:null,filteredTokenAtRow:selectedCell!=null?filteredTokenIndices[selectedCell.row]:null},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{}); }
-                // #endregion
-                return showGeneration && isValidSelection && selectedCell;
-              })() && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                  className="logitlens-generation-panel mt-8 overflow-hidden"
-                >
-                  <div className="logitlens-generation-panel-inner bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl border-2 border-blue-200 p-8">
-                    <div className="flex justify-between items-start mb-6">
-                      <div>
-                        <h2 className="text-2xl font-bold text-blue-900">Token Generation Process</h2>
-                        <p className="text-gray-700 mt-1">
-                          Watch how token predictions evolve through each layer
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => setShowGeneration(false)}
-                        className="text-gray-500 hover:text-gray-700"
-                      >
-                        <X size={24} />
-                      </button>
-                    </div>
-
-                    <AnimatedTokenList
-                      data={data}
-                      selectedCell={selectedCell!}
-                      filteredTokenIndices={filteredTokenIndices}
-                      filteredLayerIndices={filteredLayerIndices}
-                    />
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </div>
         </div>
 
-        {/* Color scale legend - separate column so it never overlaps the heatmap */}
+        {/* Color scale legend */}
         <div
           style={{
             flexShrink: 0,
-            width: 56,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: 8,
-            paddingLeft: 16,
-            paddingRight: 8,
+            paddingLeft: 12,
+            paddingRight: 12,
+            paddingTop: 8,
           }}
         >
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 500,
-              whiteSpace: 'nowrap',
-              transform: 'rotate(-90deg)',
-              transformOrigin: 'center',
-            }}
-          >
-            probability
+          <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 6 }}>
+            Probability
           </div>
-          <div
-            style={{
-              height: 256,
-              width: 24,
-              background: 'linear-gradient(to top, rgba(30, 64, 175, 0) 0%, rgba(30, 64, 175, 1) 100%)',
-              position: 'relative',
-            }}
-          >
-            <div style={{ position: 'absolute', right: -28, top: 0, fontSize: 12 }}>1.00</div>
-            <div style={{ position: 'absolute', right: -28, bottom: 0, fontSize: 12 }}>0.00</div>
+          <div style={{ display: 'flex', alignItems: 'stretch', gap: 4 }}>
+            <div
+              style={{
+                height: 200,
+                width: 16,
+                background: `linear-gradient(to bottom, ${THEME.heatmapBase.hex} 0%, rgb(255,255,255) 100%)`,
+                borderRadius: 2,
+                border: `1px solid ${THEME.borderLight}`,
+              }}
+            />
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                fontSize: 10,
+                color: THEME.textMuted,
+              }}
+            >
+              <span>1.0</span>
+              <span>0.5</span>
+              <span>0.0</span>
+            </div>
           </div>
         </div>
 
         {/* Side panel for selection - always visible, updates on hover */}
-        <div className="w-96 flex-shrink-0 bg-white border-l border-gray-200 p-6 flex flex-col">
+        <div className="w-96 flex-shrink-0 bg-white border-l border-gray-200 p-6 flex flex-col overflow-hidden" style={{ maxWidth: '24rem' }}>
           {(selectedCell || hoveredCell) ? (
             <>
               <div className="mb-4 flex-shrink-0">
                 <h3 className="font-semibold text-lg">
                   {selectedCell ? 'Selected Position' : 'Hovered Position'}
                 </h3>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 truncate" title={`Token: ${selectedCell ? filteredTokens[selectedCell.row] : filteredTokens[hoveredCell!.row]} | Layer: ${selectedCell ? filteredLayers[selectedCell.col] : filteredLayers[hoveredCell!.col]}`}>
                   Token: {selectedCell ? filteredTokens[selectedCell.row] : filteredTokens[hoveredCell!.row]} | Layer: {selectedCell ? filteredLayers[selectedCell.col] : filteredLayers[hoveredCell!.col]}
                 </p>
               </div>
@@ -434,24 +504,59 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                   ).slice(0, 15).map((item, idx) => (
                     <div
                       key={idx}
-                      style={{ display: 'flex', alignItems: 'center', gap: '2rem', fontSize: 14, padding: '4px 8px' }}
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: 14, padding: '4px 8px' }}
                       className="hover:bg-gray-50 rounded"
                     >
-                      <span className="font-mono">{item.token}</span>
-                      <span style={{ color: '#4b5563', marginLeft: 'auto' }}>{(item.prob * 100).toFixed(2)}%</span>
+                      <span className="font-mono truncate" style={{ minWidth: 0, flex: 1 }} title={item.token}>{item.token}</span>
+                      <span style={{ color: THEME.probText, flexShrink: 0 }}>{(item.prob * 100).toFixed(2)}%</span>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {selectedCell && (
+              {selectedCell && (<div className="flex flex-col gap-2 flex-shrink-0">
                 <button
                   onClick={() => setShowGeneration(true)}
-                  className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium flex-shrink-0"
+                  className="w-full py-2.5 px-4 rounded-lg font-medium flex-shrink-0 transition-all cursor-pointer"
+                  style={{
+                    backgroundColor: THEME.primary,
+                    color: THEME.textOnDark,
+                    border: `2px solid ${THEME.primaryHover}`,
+                    boxShadow: THEME.buttonShadow(THEME.primary, 0.3),
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = THEME.primaryHover;
+                    e.currentTarget.style.boxShadow = THEME.buttonShadow(THEME.primary, 0.4);
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = THEME.primary;
+                    e.currentTarget.style.boxShadow = THEME.buttonShadow(THEME.primary, 0.3);
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
                 >
                   View Token Generation
                 </button>
-              )}
+                <button
+                  onClick={() => { setSelectedCell(null); setShowGeneration(false); }}
+                  className="w-full py-2 px-4 rounded-lg font-medium transition-all cursor-pointer"
+                  style={{
+                    backgroundColor: THEME.surfaceWhite,
+                    color: THEME.textMuted,
+                    border: `1px solid ${THEME.borderMedium}`,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f3f4f6'; // slight grey hover
+                    e.currentTarget.style.color = THEME.textBody;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = THEME.surfaceWhite;
+                    e.currentTarget.style.color = THEME.textMuted;
+                  }}
+                >
+                  Clear Selection
+                </button>
+              </div>)}
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-gray-400">
@@ -459,7 +564,84 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
             </div>
           )}
         </div>
+
       </div>
+
+      {/* Token Generation overlay - covers entire component */}
+      <AnimatePresence>
+        {(() => {
+          // #region agent log
+          if (typeof fetch !== 'undefined') { fetch('http://127.0.0.1:7244/ingest/fc915240-872e-4c1a-aef6-bf81d338a109',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LogitLensGrid.tsx:gen-panel',message:'Generation panel visibility',data:{showGeneration,isValidSelection:!!isValidSelection,selectedCell:selectedCell??null,filteredLayerAtCol:selectedCell!=null?filteredLayerIndices[selectedCell.col]:null,filteredTokenAtRow:selectedCell!=null?filteredTokenIndices[selectedCell.row]:null},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{}); }
+          // #endregion
+          return showGeneration && isValidSelection && selectedCell;
+        })() && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="logitlens-generation-panel"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 50,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '2rem',
+              backgroundColor: THEME.overlayBg,
+              backdropFilter: 'blur(2px)',
+            }}
+            onClick={() => setShowGeneration(false)}
+          >
+            <div
+              className="logitlens-generation-panel-inner"
+              style={{
+                backgroundColor: THEME.surfacePanel,
+                maxWidth: '720px',
+                width: '90%',
+                maxHeight: '90%',
+                overflow: 'hidden',
+                boxShadow: THEME.modalShadow,
+                borderRadius: '1rem',
+                border: `2px solid ${THEME.primaryLight}`,
+                padding: '1.25rem 1.5rem',
+                display: 'flex',
+                flexDirection: 'column' as const,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+                <div>
+                  <h2 style={{ fontSize: '0.95rem', fontWeight: 600, color: THEME.textDark }}>Token Generation Process</h2>
+                  <p style={{ color: THEME.textBody, marginTop: '0.125rem', fontSize: '0.8rem' }}>
+                    Watch how token predictions evolve through each layer
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowGeneration(false)}
+                  style={{ color: THEME.textMuted, cursor: 'pointer', background: 'none', border: 'none' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.7rem', color: THEME.textMuted, marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                <span><span style={{ color: THEME.rankUp }}>&#9650;</span> moved up from previous layer</span>
+                <span><span style={{ color: THEME.rankDown }}>&#9660;</span> moved down from previous layer</span>
+                <span><span style={{ color: THEME.rankNew }}>NEW</span> not in previous layer's top 15</span>
+              </div>
+
+              <AnimatedTokenList
+                data={data}
+                selectedCell={selectedCell!}
+                filteredTokenIndices={filteredTokenIndices}
+                filteredLayerIndices={filteredLayerIndices}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -471,24 +653,55 @@ interface AnimatedTokenListProps {
   filteredLayerIndices: number[];
 }
 
+/**
+ * Compute rank-change labels for each token at `layerIdx` by comparing
+ * against the previous layer's top-k list.
+ *
+ * Returns an array (one entry per token in the current layer's top-k) of:
+ *   { isNew: boolean, rankChange: number | null }
+ *
+ * - Layer 0 has no previous layer → all entries have isNew=false, rankChange=null
+ * - A token not present in the previous layer's top-k → isNew=true
+ * - rankChange > 0 means the token moved UP (e.g. was #5, now #2 → +3)
+ * - rankChange < 0 means the token moved DOWN
+ * - rankChange === 0 means unchanged
+ */
+function computeRankLabels(
+  data: LogitLensData,
+  tokenRowIdx: number,
+  layerIdx: number,
+  topK: number = 15,
+): { isNew: boolean; rankChange: number | null }[] {
+  const currentTopTokens = [...(data.data[tokenRowIdx]?.[layerIdx]?.topTokens ?? [])].sort((a, b) => b.prob - a.prob).slice(0, topK);
+
+  if (layerIdx === 0) {
+    return currentTopTokens.map(() => ({ isNew: false, rankChange: null }));
+  }
+
+  const prevTopTokens = [...(data.data[tokenRowIdx]?.[layerIdx - 1]?.topTokens ?? [])].sort((a, b) => b.prob - a.prob).slice(0, topK);
+  const prevRanks = new Map<string, number>();
+  prevTopTokens.forEach((t, i) => {
+    if (!prevRanks.has(t.token)) prevRanks.set(t.token, i);
+  });
+
+  return currentTopTokens.map((t, idx) => {
+    const prevRank = prevRanks.get(t.token);
+    if (prevRank === undefined) {
+      return { isNew: true, rankChange: null };
+    }
+    return { isNew: false, rankChange: prevRank - idx };
+  });
+}
+
 function AnimatedTokenList({ data, selectedCell, filteredTokenIndices, filteredLayerIndices }: AnimatedTokenListProps) {
   const [currentLayerIdx, setCurrentLayerIdx] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [prevTokens, setPrevTokens] = useState<Set<string>>(new Set());
-  
-  // Use full layer range so progress shows "0 / N" for all layers (matches screenshot), not just up to selected column
+
   const maxLayerIdx = data.layers.length > 0 ? data.layers[data.layers.length - 1] : 0;
   const tokenRowIdx = filteredTokenIndices[selectedCell.row];
   const cellData = data.data[tokenRowIdx]?.[currentLayerIdx];
-  const currentTokens = cellData?.topTokens?.slice(0, 15) ?? [];
-  // #region agent log
-  if (typeof fetch !== 'undefined') { fetch('http://127.0.0.1:7244/ingest/fc915240-872e-4c1a-aef6-bf81d338a109',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LogitLensGrid.tsx:AnimatedTokenList',message:'AnimatedTokenList render',data:{currentLayerIdx,maxLayerIdx,tokenRowIdx,selectedCell,col:selectedCell.col,row:selectedCell.row,currentTokensLength:currentTokens.length,hasCellData:!!cellData,progressDenom:maxLayerIdx},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{}); }
-  // #endregion
-  
-  // Update previous tokens when layer changes
-  useEffect(() => {
-    setPrevTokens(new Set(currentTokens.map(t => t.token)));
-  }, [currentLayerIdx]);
+  const currentTokens = [...(cellData?.topTokens ?? [])].sort((a, b) => b.prob - a.prob).slice(0, 15);
+  const rankLabels = computeRankLabels(data, tokenRowIdx, currentLayerIdx, 15);
 
   // Auto-play through layers
   useEffect(() => {
@@ -496,25 +709,18 @@ function AnimatedTokenList({ data, selectedCell, filteredTokenIndices, filteredL
     if (isPlaying && currentLayerIdx < maxLayerIdx) {
       interval = setInterval(() => {
         setCurrentLayerIdx(prev => {
-          const next = prev >= maxLayerIdx ? prev : prev + 1;
-          // #region agent log
-          if (typeof fetch !== 'undefined') { fetch('http://127.0.0.1:7244/ingest/fc915240-872e-4c1a-aef6-bf81d338a109',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LogitLensGrid.tsx:interval',message:'Layer step tick',data:{prev,next,maxLayerIdx},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{}); }
-          // #endregion
           if (prev >= maxLayerIdx) {
             setIsPlaying(false);
             return prev;
           }
           return prev + 1;
         });
-      }, 2500); // 2.5 seconds per layer
+      }, 2500);
     }
     return () => clearInterval(interval);
   }, [isPlaying, currentLayerIdx, maxLayerIdx]);
 
   const handlePlayPause = () => {
-    // #region agent log
-    if (typeof fetch !== 'undefined') { fetch('http://127.0.0.1:7244/ingest/fc915240-872e-4c1a-aef6-bf81d338a109',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LogitLensGrid.tsx:handlePlayPause',message:'Play/Pause clicked',data:{currentLayerIdx,maxLayerIdx,willReplay:currentLayerIdx>=maxLayerIdx},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{}); }
-    // #endregion
     if (currentLayerIdx >= maxLayerIdx) {
       setCurrentLayerIdx(0);
       setIsPlaying(true);
@@ -539,67 +745,71 @@ function AnimatedTokenList({ data, selectedCell, filteredTokenIndices, filteredL
   };
 
   return (
-    <div className="flex flex-col items-center">
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%' }}>
       {/* Layer indicator */}
-      <div className="mb-6 text-center">
-        <h3 className="text-4xl font-bold text-blue-900 mb-2">Layer {currentLayerIdx}</h3>
-        <div className="w-full max-w-md h-2 bg-blue-200 rounded-full overflow-hidden">
+      <div style={{ marginBottom: '0.5rem', textAlign: 'center', width: '100%' }}>
+        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: THEME.textDark, marginBottom: '0.25rem' }}>Layer {currentLayerIdx}/{maxLayerIdx}</h3>
+        <div style={{ width: '100%', maxWidth: '20rem', height: '0.375rem', backgroundColor: THEME.primaryLight, borderRadius: '9999px', overflow: 'hidden', margin: '0 auto' }}>
           <motion.div
-            className="h-full bg-blue-600"
+            style={{ height: '100%', backgroundColor: THEME.primary }}
             initial={{ width: 0 }}
             animate={{ width: `${(currentLayerIdx / maxLayerIdx) * 100}%` }}
             transition={{ type: "spring", damping: 20, stiffness: 100 }}
           />
         </div>
-        <p className="text-sm text-gray-600 mt-2">
-          {currentLayerIdx} / {maxLayerIdx}
-        </p>
       </div>
 
-      {/* Animated token list - card shape matches buttons (class + inline for widget bundle without Tailwind) */}
-      <div className="w-full max-w-2xl mb-6">
-        <div className="logitlens-generation-cards flex flex-col items-center gap-4 relative">
+      {/* Animated token list */}
+      <div style={{ width: '100%', maxWidth: '36rem', marginBottom: '1rem', flex: 1, minHeight: 0, overflow: 'auto' }}>
+        <div className="logitlens-generation-cards" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', position: 'relative' }}>
           <AnimatePresence mode="popLayout">
             {currentTokens.map((item, idx) => {
-              const isNew = !prevTokens.has(item.token);
+              const { isNew, rankChange } = rankLabels[idx] ?? { isNew: false, rankChange: null };
               return (
                 <motion.div
-                  key={item.token}
+                  key={`${idx}-${item.token}`}
                   layout
-                  initial={isNew ? { opacity: 0, y: 100, scale: 0.8 } : false}
+                  initial={isNew ? { opacity: 0, y: 50, scale: 0.95 } : false}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.8 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
                   transition={{
                     layout: { type: "spring", damping: 30, stiffness: 60 },
-                    opacity: { duration: 0.4 },
+                    opacity: { duration: 0.3 },
                     y: { type: "spring", damping: 30, stiffness: 60 },
-                    scale: { duration: 0.3 }
+                    scale: { duration: 0.2 }
                   }}
-                  className="logitlens-token-card rounded-lg border-2 border-blue-300 px-6 py-3 shadow-md w-full"
+                  className="logitlens-token-card"
                   style={{
-                    backgroundColor: `rgba(147, 197, 253, ${0.2 + item.prob * 0.6})`,
-                    borderRadius: "0.5rem",
-                    padding: "0.75rem 1.5rem",
-                    border: "2px solid rgb(147 197 253)",
-                    boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-                    width: "100%",
-                    minWidth: "20rem",
+                    backgroundColor: THEME.tokenCardBg(item.prob),
+                    borderRadius: '0.375rem',
+                    padding: '0.25rem 0.75rem',
+                    border: `1px solid ${THEME.tokenCardBorder}`,
+                    width: '100%',
                   }}
                 >
-                  <div className="flex justify-between items-center gap-6">
-                    <div className="flex items-center gap-6 shrink-0">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                       <motion.span
                         key={`rank-${idx}`}
                         layout
-                        className="text-lg font-bold text-blue-900"
+                        style={{ fontSize: '0.8rem', fontWeight: 700, color: THEME.textDark, width: '1.75rem' }}
                       >
                         #{idx + 1}
                       </motion.span>
-                      <span className="font-mono text-base font-medium text-blue-900">
+                      <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 500, color: THEME.textDark }}>
                         {item.token}
                       </span>
+                      <span style={{ fontSize: '0.7rem', fontWeight: 600, marginLeft: '0.25rem' }}>
+                        {isNew ? (
+                          <span style={{ color: THEME.rankNew }}>NEW</span>
+                        ) : rankChange !== null && rankChange > 0 ? (
+                          <span style={{ color: THEME.rankUp }}>&#9650;{rankChange}</span>
+                        ) : rankChange !== null && rankChange < 0 ? (
+                          <span style={{ color: THEME.rankDown }}>&#9660;{Math.abs(rankChange)}</span>
+                        ) : null}
+                      </span>
                     </div>
-                    <span className="text-base font-bold text-blue-900 shrink-0 text-right">
+                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: THEME.textDark, flexShrink: 0 }}>
                       {(item.prob * 100).toFixed(1)}%
                     </span>
                   </div>
@@ -611,30 +821,30 @@ function AnimatedTokenList({ data, selectedCell, filteredTokenIndices, filteredL
       </div>
 
       {/* Controls */}
-      <div className="flex items-center gap-4">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0, paddingTop: '0.5rem' }}>
         <button
           onClick={handleReset}
-          className="bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600 transition-colors font-medium"
+          style={{ backgroundColor: THEME.textMuted, color: THEME.textOnDark, padding: '0.35rem 0.75rem', borderRadius: '0.5rem', fontWeight: 500, fontSize: '0.8rem', border: 'none', cursor: 'pointer' }}
         >
           Reset
         </button>
         <button
           onClick={handlePrev}
           disabled={currentLayerIdx === 0}
-          className="bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors font-medium disabled:bg-gray-300 disabled:cursor-not-allowed"
+          style={{ backgroundColor: currentLayerIdx === 0 ? THEME.disabledBg : THEME.primary, color: THEME.textOnDark, padding: '0.35rem 0.75rem', borderRadius: '0.5rem', fontWeight: 500, fontSize: '0.8rem', border: 'none', cursor: currentLayerIdx === 0 ? 'not-allowed' : 'pointer' }}
         >
           Previous
         </button>
         <button
           onClick={handlePlayPause}
-          className="bg-blue-600 text-white py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors font-bold text-lg"
+          style={{ backgroundColor: THEME.primary, color: THEME.textOnDark, padding: '0.4rem 1.25rem', borderRadius: '0.5rem', fontWeight: 700, fontSize: '0.85rem', border: 'none', cursor: 'pointer' }}
         >
           {isPlaying ? 'Pause' : currentLayerIdx >= maxLayerIdx ? 'Replay' : 'Play'}
         </button>
         <button
           onClick={handleNext}
           disabled={currentLayerIdx >= maxLayerIdx}
-          className="bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors font-medium disabled:bg-gray-300 disabled:cursor-not-allowed"
+          style={{ backgroundColor: currentLayerIdx >= maxLayerIdx ? THEME.disabledBg : THEME.primary, color: THEME.textOnDark, padding: '0.35rem 0.75rem', borderRadius: '0.5rem', fontWeight: 500, fontSize: '0.8rem', border: 'none', cursor: currentLayerIdx >= maxLayerIdx ? 'not-allowed' : 'pointer' }}
         >
           Next
         </button>
@@ -702,29 +912,26 @@ function GenerationView({ data, selectedCell, filteredTokenIndices, filteredLaye
   };
 
   return (
-    <div className="flex flex-col items-center">
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%' }}>
       {/* Layer indicator */}
-      <div className="mb-6 text-center">
-        <h3 className="text-4xl font-bold text-blue-900 mb-2">Layer {currentLayerIdx}</h3>
-        <div className="w-full max-w-md h-2 bg-blue-200 rounded-full overflow-hidden">
+      <div style={{ marginBottom: '0.5rem', textAlign: 'center', width: '100%' }}>
+        <h3 style={{ fontSize: '0.9rem', fontWeight: 600, color: THEME.textDark, marginBottom: '0.25rem' }}>Layer {currentLayerIdx}/{maxLayerIdx}</h3>
+        <div style={{ width: '100%', maxWidth: '20rem', height: '0.375rem', backgroundColor: THEME.primaryLight, borderRadius: '9999px', overflow: 'hidden', margin: '0 auto' }}>
           <motion.div
-            className="h-full bg-blue-600"
+            style={{ height: '100%', backgroundColor: THEME.primary }}
             initial={{ width: 0 }}
             animate={{ width: `${(currentLayerIdx / maxLayerIdx) * 100}%` }}
             transition={{ type: "spring", damping: 20, stiffness: 100 }}
           />
         </div>
-        <p className="text-sm text-gray-600 mt-2">
-          {currentLayerIdx} / {maxLayerIdx}
-        </p>
       </div>
 
       {/* Animated token list */}
-      <div className="w-full max-w-2xl mb-6">
-        <div className="space-y-2">
+      <div style={{ width: '100%', maxWidth: '36rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
           {currentTokens.map((item, idx) => (
             <motion.div
-              key={item.token}
+              key={`${idx}-${item.token}`}
               layout
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -733,17 +940,19 @@ function GenerationView({ data, selectedCell, filteredTokenIndices, filteredLaye
                 layout: { type: "spring", damping: 30, stiffness: 60 },
                 opacity: { duration: 0.4 }
               }}
-              className="bg-white rounded-lg px-6 py-4 shadow-md border-2 border-blue-300"
               style={{
-                backgroundColor: `rgba(59, 130, 246, ${0.1 + item.prob * 0.3})`,
+                backgroundColor: THEME.tokenCardBg(item.prob),
+                borderRadius: '0.375rem',
+                padding: '0.25rem 0.75rem',
+                border: `1px solid ${THEME.tokenCardBorder}`,
               }}
             >
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-4">
-                  <span className="text-2xl font-bold text-blue-900 w-8">#{idx + 1}</span>
-                  <span className="font-mono text-xl font-medium">{item.token}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: THEME.textDark, width: '1.75rem' }}>#{idx + 1}</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 500, color: THEME.textDark }}>{item.token}</span>
                 </div>
-                <span className="text-lg font-bold text-blue-900">
+                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: THEME.textDark }}>
                   {(item.prob * 100).toFixed(1)}%
                 </span>
               </div>
@@ -753,30 +962,30 @@ function GenerationView({ data, selectedCell, filteredTokenIndices, filteredLaye
       </div>
 
       {/* Controls */}
-      <div className="flex items-center gap-4">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
         <button
           onClick={handleReset}
-          className="bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600 transition-colors font-medium"
+          style={{ backgroundColor: THEME.textMuted, color: THEME.textOnDark, padding: '0.35rem 0.75rem', borderRadius: '0.5rem', fontWeight: 500, fontSize: '0.8rem', border: 'none', cursor: 'pointer' }}
         >
           Reset
         </button>
         <button
           onClick={handlePrev}
           disabled={currentLayerIdx === 0}
-          className="bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors font-medium disabled:bg-gray-300 disabled:cursor-not-allowed"
+          style={{ backgroundColor: currentLayerIdx === 0 ? THEME.disabledBg : THEME.primary, color: THEME.textOnDark, padding: '0.35rem 0.75rem', borderRadius: '0.5rem', fontWeight: 500, fontSize: '0.8rem', border: 'none', cursor: currentLayerIdx === 0 ? 'not-allowed' : 'pointer' }}
         >
           Previous
         </button>
         <button
           onClick={handlePlayPause}
-          className="bg-blue-600 text-white py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors font-bold text-lg"
+          style={{ backgroundColor: THEME.primary, color: THEME.textOnDark, padding: '0.4rem 1.25rem', borderRadius: '0.5rem', fontWeight: 700, fontSize: '0.85rem', border: 'none', cursor: 'pointer' }}
         >
           {isPlaying ? 'Pause' : currentLayerIdx >= maxLayerIdx ? 'Replay' : 'Play'}
         </button>
         <button
           onClick={handleNext}
           disabled={currentLayerIdx >= maxLayerIdx}
-          className="bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors font-medium disabled:bg-gray-300 disabled:cursor-not-allowed"
+          style={{ backgroundColor: currentLayerIdx >= maxLayerIdx ? THEME.disabledBg : THEME.primary, color: THEME.textOnDark, padding: '0.35rem 0.75rem', borderRadius: '0.5rem', fontWeight: 500, fontSize: '0.8rem', border: 'none', cursor: currentLayerIdx >= maxLayerIdx ? 'not-allowed' : 'pointer' }}
         >
           Next
         </button>
