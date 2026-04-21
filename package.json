@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "lucide-react": "^0.487.0",
-    "motion": "^12.23.24"
+    "motion": "^12.23.24",
+    "react-dnd": "^16.0.1",
+    "react-dnd-html5-backend": "^16.0.1"
   }
 }

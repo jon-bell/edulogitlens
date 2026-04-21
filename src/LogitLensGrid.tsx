@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
@@ -74,9 +74,23 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
   const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number } | null>(null);
   const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
   const [showGeneration, setShowGeneration] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState(1);
+  const [zoomLevel, setZoomLevel] = useState<number | null>(null);
   const [tokenStep, setTokenStep] = useState(1);
   const [layerStep, setLayerStep] = useState(1);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Start at zoom=1 and let the grid scroll horizontally if it doesn't fit.
+  const computeFitZoom = useCallback(() => {
+    return 1;
+  }, []);
+
+  // Set initial zoom on mount / when data changes
+  useEffect(() => {
+    setZoomLevel(computeFitZoom());
+  }, [computeFitZoom]);
+
+  // If zoom hasn't been computed yet, render nothing until we can measure
+  const effectiveZoom = zoomLevel ?? 1;
 
   const handleCellClick = (row: number, col: number) => {
     if (selectedCell?.row === row && selectedCell?.col === col) {
@@ -88,10 +102,10 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
     }
   };
 
-  const handleZoomIn = () => setZoomLevel(prev => Math.min(prev + 0.25, 3));
-  const handleZoomOut = () => setZoomLevel(prev => Math.max(prev - 0.25, 0.5));
+  const handleZoomIn = () => setZoomLevel(prev => Math.min((prev ?? 1) + 0.25, 3));
+  const handleZoomOut = () => setZoomLevel(prev => Math.max((prev ?? 1) - 0.25, 0.5));
   const handleResetZoom = () => {
-    setZoomLevel(1);
+    setZoomLevel(computeFitZoom());
     setTokenStep(1);
     setLayerStep(1);
   };
@@ -128,8 +142,8 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
     selectedCell.row >= 0 &&
     selectedCell.col >= 0;
 
-  const cellSize = 64 * zoomLevel;
-  const labelColWidth = Math.max(80, 80 * zoomLevel);
+  const cellSize = 64 * effectiveZoom;
+  const labelColWidth = Math.max(80, 80 * effectiveZoom);
   const headerRowHeight = 28;
 
   const getBackgroundColor = (prob: number) => {
@@ -193,40 +207,28 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
   };
 
   return (
-    <div className="w-full h-full flex flex-col gap-4 overflow-hidden relative">
+    <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: '1rem', overflow: 'hidden', position: 'relative' }}>
       {/* Controls */}
-      <div className="flex items-center justify-between gap-4 px-4 py-3 bg-gray-50 rounded-lg border border-gray-200 flex-shrink-0 min-w-0 overflow-hidden">
-        <div className="flex items-center gap-6 min-w-0 flex-shrink-1">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', padding: '0.75rem 1rem', backgroundColor: '#f9fafb', borderRadius: '0.5rem', border: '1px solid #e5e7eb', flexShrink: 0, minWidth: 0, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
           {/* Zoom controls */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-gray-700">Zoom:</span>
-            <button
-              onClick={handleZoomOut}
-              className="p-2 rounded hover:bg-gray-200 transition-colors"
-              title="Zoom Out"
-            >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+            <span style={{ fontSize: '0.875rem', fontWeight: 500, color: '#374151' }}>Zoom:</span>
+            <button onClick={handleZoomOut} style={{ padding: '0.5rem', borderRadius: '0.25rem', border: 'none', background: 'none', cursor: 'pointer' }} title="Zoom Out">
               <ZoomOut size={18} />
             </button>
-            <span className="text-sm font-medium min-w-12 text-center">{Math.round(zoomLevel * 100)}%</span>
-            <button
-              onClick={handleZoomIn}
-              className="p-2 rounded hover:bg-gray-200 transition-colors"
-              title="Zoom In"
-            >
+            <span style={{ fontSize: '0.875rem', fontWeight: 500, minWidth: '3rem', textAlign: 'center' }}>{Math.round(effectiveZoom * 100)}%</span>
+            <button onClick={handleZoomIn} style={{ padding: '0.5rem', borderRadius: '0.25rem', border: 'none', background: 'none', cursor: 'pointer' }} title="Zoom In">
               <ZoomIn size={18} />
             </button>
-            <button
-              onClick={handleResetZoom}
-              className="p-2 rounded hover:bg-gray-200 transition-colors"
-              title="Reset"
-            >
+            <button onClick={handleResetZoom} style={{ padding: '0.5rem', borderRadius: '0.25rem', border: 'none', background: 'none', cursor: 'pointer' }} title="Reset">
               <RotateCcw size={18} />
             </button>
           </div>
 
           {/* Token step control */}
-          <div className="flex items-center gap-2">
-            <label htmlFor="token-step" className="text-sm font-medium text-gray-700">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+            <label htmlFor="token-step" style={{ fontSize: '0.875rem', fontWeight: 500, color: '#374151' }}>
               Token Step:
             </label>
             <input
@@ -236,13 +238,13 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
               max="10"
               value={tokenStep}
               onChange={(e) => handleTokenStepChange(Math.max(1, parseInt(e.target.value) || 1))}
-              className="w-16 px-2 py-1 border border-gray-300 rounded text-sm"
+              style={{ width: '4rem', padding: '0.25rem 0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem' }}
             />
           </div>
 
           {/* Layer step control */}
-          <div className="flex items-center gap-2">
-            <label htmlFor="layer-step" className="text-sm font-medium text-gray-700">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+            <label htmlFor="layer-step" style={{ fontSize: '0.875rem', fontWeight: 500, color: '#374151' }}>
               Layer Step:
             </label>
             <input
@@ -252,21 +254,37 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
               max="10"
               value={layerStep}
               onChange={(e) => handleLayerStepChange(Math.max(1, parseInt(e.target.value) || 1))}
-              className="w-16 px-2 py-1 border border-gray-300 rounded text-sm"
+              style={{ width: '4rem', padding: '0.25rem 0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem' }}
             />
           </div>
         </div>
 
-        <div className="text-sm text-gray-600 flex-shrink-0 whitespace-nowrap">
+        <div style={{ fontSize: '0.875rem', color: '#4b5563', flexShrink: 0, whiteSpace: 'nowrap' }}>
           Showing {filteredTokens.length} tokens × {filteredLayers.length} layers
         </div>
       </div>
 
-      {/* Main content area with grid and side panel */}
-      <div className="flex-1 flex gap-4 min-h-0 min-w-0 overflow-hidden">
-        {/* Grid with smooth scrolling */}
-        <div className="flex-1 overflow-auto p-6 min-h-0 min-w-0" style={{ scrollBehavior: 'smooth' }}>
-          <div className="relative inline-block min-w-full">
+      {/* Main content area with heatmap box and side panel */}
+      <div style={{ flex: '1 1 0px', display: 'flex', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+        {/* Heatmap box — scrolls independently, never affects siblings */}
+        <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: '16rem', overflow: 'auto', padding: '1.5rem', scrollBehavior: 'smooth', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}>
+          {/* Horizontal color scale legend — above the heatmap */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 11, fontWeight: 500, color: THEME.textBody }}>Probability</span>
+            <span style={{ fontSize: 10, color: THEME.textMuted }}>0.0</span>
+            <div
+              style={{
+                width: 150,
+                height: 12,
+                background: `linear-gradient(to right, rgb(255,255,255) 0%, ${THEME.heatmapBase.hex} 100%)`,
+                borderRadius: 2,
+                border: `1px solid ${THEME.borderLight}`,
+              }}
+            />
+            <span style={{ fontSize: 10, color: THEME.textMuted }}>1.0</span>
+          </div>
+
+          <div style={{ display: 'inline-block', position: 'relative' }}>
             {/* Y-axis "Input Tokens" label - separate from grid */}
             <div className="absolute text-sm font-medium whitespace-nowrap" style={{ left: -16, top: '50%', transform: 'translateX(-50%) translateY(-50%) rotate(-90deg)' }}>
               Input Tokens
@@ -295,7 +313,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                       style={{
                         width: cellSize,
                         height: headerRowHeight,
-                        fontSize: Math.max(10, 10 * zoomLevel),
+                        fontSize: Math.max(10, 10 * effectiveZoom),
                         textAlign: 'center',
                         flexShrink: 0,
                         fontWeight: 500,
@@ -318,7 +336,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                     flexShrink: 0,
                     paddingRight: 12,
                     textAlign: 'right',
-                    fontSize: Math.max(12, 12 * zoomLevel),
+                    fontSize: Math.max(12, 12 * effectiveZoom),
                     fontWeight: 500,
                   }}
                 >
@@ -375,26 +393,26 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                         >
                           <div
                             className="logitlens-heatmap-cell-token absolute inset-0 flex items-center justify-center font-medium"
-                            style={{ fontSize: Math.max(12, 12 * zoomLevel), color: getTextColor(cellData.probability) }}
+                            style={{ fontSize: Math.max(12, 12 * effectiveZoom), color: getTextColor(cellData.probability) }}
                           >
                             {cellData.token}
                           </div>
                           {hasRedBox && (
                             <div
                               className="logitlens-heatmap-overlay logitlens-heatmap-overlay-red absolute inset-0 border-red-500 pointer-events-none"
-                              style={{ borderWidth: Math.max(2, 2 * zoomLevel) }}
+                              style={{ borderWidth: Math.max(2, 2 * effectiveZoom) }}
                             />
                           )}
                           {hasSelectedBox && (
                             <div
                               className="logitlens-heatmap-overlay logitlens-heatmap-overlay-blue absolute inset-0 border-blue-400 pointer-events-none"
-                              style={{ borderWidth: Math.max(2, 2 * zoomLevel) }}
+                              style={{ borderWidth: Math.max(2, 2 * effectiveZoom) }}
                             />
                           )}
                           {isSelected && (
                             <div
                               className="logitlens-heatmap-overlay logitlens-heatmap-overlay-yellow absolute inset-0 border-yellow-400 pointer-events-none"
-                              style={{ borderWidth: Math.max(4, 4 * zoomLevel) }}
+                              style={{ borderWidth: Math.max(4, 4 * effectiveZoom) }}
                             />
                           )}
                         </div>
@@ -414,7 +432,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                       style={{
                         width: cellSize,
                         height: headerRowHeight,
-                        fontSize: Math.max(10, 10 * zoomLevel),
+                        fontSize: Math.max(10, 10 * effectiveZoom),
                         textAlign: 'center',
                         flexShrink: 0,
                         fontWeight: 500,
@@ -438,52 +456,12 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
               </div>
             </div>
 
-          </div>
-        </div>
 
-        {/* Color scale legend */}
-        <div
-          style={{
-            flexShrink: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            paddingLeft: 12,
-            paddingRight: 12,
-            paddingTop: 8,
-          }}
-        >
-          <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 6 }}>
-            Probability
-          </div>
-          <div style={{ display: 'flex', alignItems: 'stretch', gap: 4 }}>
-            <div
-              style={{
-                height: 200,
-                width: 16,
-                background: `linear-gradient(to bottom, ${THEME.heatmapBase.hex} 0%, rgb(255,255,255) 100%)`,
-                borderRadius: 2,
-                border: `1px solid ${THEME.borderLight}`,
-              }}
-            />
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between',
-                fontSize: 10,
-                color: THEME.textMuted,
-              }}
-            >
-              <span>1.0</span>
-              <span>0.5</span>
-              <span>0.0</span>
-            </div>
           </div>
         </div>
 
         {/* Side panel for selection - always visible, updates on hover */}
-        <div className="w-96 flex-shrink-0 bg-white border-l border-gray-200 p-6 flex flex-col overflow-hidden" style={{ maxWidth: '24rem' }}>
+        <div className="bg-white border-l border-gray-200 flex flex-col overflow-hidden" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: '16rem', padding: '1rem' }}>
           {(selectedCell || hoveredCell) ? (
             <>
               <div className="mb-4 flex-shrink-0">
@@ -498,8 +476,8 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
               <div className="mb-4 flex-1 min-h-0 flex flex-col">
                 <h4 className="font-medium mb-2 flex-shrink-0">Top 15 Tokens</h4>
                 <div className="space-y-1 overflow-y-auto flex-1">
-                  {(selectedCell 
-                    ? filteredData[selectedCell.row][selectedCell.col].topTokens 
+                  {(selectedCell
+                    ? filteredData[selectedCell.row][selectedCell.col].topTokens
                     : filteredData[hoveredCell!.row][hoveredCell!.col].topTokens
                   ).slice(0, 15).map((item, idx) => (
                     <div
@@ -546,7 +524,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                     border: `1px solid ${THEME.borderMedium}`,
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f3f4f6'; // slight grey hover
+                    e.currentTarget.style.backgroundColor = '#f3f4f6';
                     e.currentTarget.style.color = THEME.textBody;
                   }}
                   onMouseLeave={(e) => {
