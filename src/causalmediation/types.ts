@@ -1,30 +1,12 @@
-export interface Token {
-  text: string;
-  probability: number;
-}
+import type { LogitCell, LogitLensData } from '../LogitLensGrid';
 
-export interface CellData {
-  tokenPosition: number;
-  layer: number;
-  predictedToken: string;
-  activationStrength: number;
-  topTokens: Token[];
-}
+export type { LogitCell, LogitLensData };
 
-export interface LayerState {
-  layer: number;
-  topTokens: Token[];
-  activationStrength: number;
-}
-
-export interface PromptData {
+export interface PromptInput {
   id: string;
   name: string;
-  text: string;
-  inputTokens: string[];
   color: string;
-  layers: LayerState[];
-  heatmapData: CellData[][];
+  data: LogitLensData;
 }
 
 export interface Intervention {
@@ -39,6 +21,6 @@ export interface Intervention {
 export interface SelectedCell {
   tokenPosition: number;
   layer: number;
-  topTokens: Token[];
+  topTokens: { token: string; prob: number }[];
   promptId: string;
 }

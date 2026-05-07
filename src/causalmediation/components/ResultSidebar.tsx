@@ -14,7 +14,7 @@ export const ResultSidebar: React.FC<ResultSidebarProps> = ({ selectedCell }) =>
       initial={{ x: 20, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
       transition={{ delay: 0.3, duration: 0.5 }}
-      className="w-80 space-y-4"
+      className="w-full min-w-0 space-y-4"
     >
       <div>
         <h3 className="text-lg font-bold text-gray-900">Selected Position</h3>
@@ -29,7 +29,7 @@ export const ResultSidebar: React.FC<ResultSidebarProps> = ({ selectedCell }) =>
           Top {selectedCell.topTokens.length} Tokens
         </h4>
         <div className="space-y-2">
-          {selectedCell.topTokens.map((token, idx) => (
+          {selectedCell.topTokens.map((t, idx) => (
             <motion.div
               key={idx}
               initial={{ x: -20, opacity: 0 }}
@@ -41,19 +41,19 @@ export const ResultSidebar: React.FC<ResultSidebarProps> = ({ selectedCell }) =>
                 <span className="text-xs font-mono text-gray-400 w-4">
                   {idx + 1}
                 </span>
-                <span className="font-semibold text-sm">{token.text}</span>
+                <span className="font-semibold text-sm">{t.token}</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden">
                   <motion.div
                     className="h-full bg-purple-500 rounded-full"
                     initial={{ width: 0 }}
-                    animate={{ width: `${token.probability * 100}%` }}
+                    animate={{ width: `${t.prob * 100}%` }}
                     transition={{ delay: 0.5 + idx * 0.05, duration: 0.4 }}
                   />
                 </div>
                 <span className="text-xs font-mono text-gray-600 w-12 text-right">
-                  {(token.probability * 100).toFixed(1)}%
+                  {(t.prob * 100).toFixed(1)}%
                 </span>
               </div>
             </motion.div>

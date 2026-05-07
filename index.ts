@@ -3,10 +3,7 @@ export type { LogitLensData, LogitCell } from "./src/LogitLensGrid";
 
 export { CausalMediationExplorer } from "./src/causalmediation/CausalMediationExplorer";
 export type {
-    PromptData,
+    PromptInput,
     Intervention,
     SelectedCell,
-    CellData,
-    Token as CMToken,
-    LayerState,
 } from "./src/causalmediation/types";

@@ -30,13 +30,13 @@ export const FlowArrow: React.FC<FlowArrowProps> = ({
       }}
     >
       <svg
-        width="36"
-        height="32"
+        width="20"
+        height="16"
         viewBox="0 0 88 73.6396"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         style={{
-          filter: `drop-shadow(0 1px 4px ${arrowColor}50)`,
+          filter: `drop-shadow(0 1px 2px ${arrowColor}20)`,
         }}
       >
         <defs>

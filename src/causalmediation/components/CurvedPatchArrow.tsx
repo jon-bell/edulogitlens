@@ -24,6 +24,11 @@ export const CurvedPatchArrow: React.FC<CurvedPatchArrowProps> = ({
     endY: number;
     width: number;
     height: number;
+    // Clip rects in SVG-local coords (i.e., relative to startX/startY).
+    // We render one <rect> per plot so the SVG clipPath composes as their
+    // union — anything outside both plots is hidden, which is what stops the
+    // arrow from extending past the heatmap when the user scrolls.
+    clipRects: { x: number; y: number; width: number; height: number }[];
   } | null>(null);
 
   useEffect(() => {
@@ -32,9 +37,24 @@ export const CurvedPatchArrow: React.FC<CurvedPatchArrowProps> = ({
       return;
     }
 
+    // Walk up to the nearest scrollable ancestor — that's the heatmap's
+    // overflow:auto container, whose viewport rect is what we want to clip to.
+    const getScrollableAncestor = (el: HTMLElement): HTMLElement | null => {
+      let node: HTMLElement | null = el.parentElement;
+      while (node && node !== document.body) {
+        const style = window.getComputedStyle(node);
+        const overflow = style.overflow + style.overflowX + style.overflowY;
+        if (/(auto|scroll|hidden)/.test(overflow)) return node;
+        node = node.parentElement;
+      }
+      return null;
+    };
+
     const updateArrowPath = () => {
       const sourceRect = sourceRef.getBoundingClientRect();
       const targetRect = targetRef.getBoundingClientRect();
+      const sourcePlot = getScrollableAncestor(sourceRef);
+      const targetPlot = getScrollableAncestor(targetRef);
 
       // Get the center points of both elements
       const sourceCenterX = sourceRect.left + sourceRect.width / 2;
@@ -70,20 +90,81 @@ export const CurvedPatchArrow: React.FC<CurvedPatchArrowProps> = ({
 
       const d = `M ${startX} ${startY} C ${controlPoint1X} ${controlPoint1Y}, ${controlPoint2X} ${controlPoint2Y}, ${endX} ${endY}`;
 
+      // Compute clip rects in SVG-local coords. The wrapper div is fixed at
+      // (minX - padding, minY - padding); SVG-local origin is the same point.
+      const wrapperLeft = minX - padding;
+      const wrapperTop = minY - padding;
+      const toLocalRect = (r: DOMRect) => ({
+        x: r.left - wrapperLeft,
+        y: r.top - wrapperTop,
+        width: r.width,
+        height: r.height,
+      });
+      const fallback = {
+        x: -wrapperLeft,
+        y: -wrapperTop,
+        width: window.innerWidth,
+        height: window.innerHeight,
+      };
+      const clipRects: { x: number; y: number; width: number; height: number }[] = [];
+      const sourcePlotRect = sourcePlot?.getBoundingClientRect();
+      const targetPlotRect = targetPlot?.getBoundingClientRect();
+      if (sourcePlotRect) clipRects.push(toLocalRect(sourcePlotRect));
+      if (targetPlotRect) clipRects.push(toLocalRect(targetPlotRect));
+
+      // Bridge rect over the gutter between the two plots, so the arrow stays
+      // visible as it crosses the blank space. Side-by-side plots get a
+      // horizontal bridge (vertical extent = overlap of the two plots);
+      // stacked plots get a vertical bridge. If the plots overlap on both
+      // axes, no bridge is needed.
+      if (sourcePlotRect && targetPlotRect) {
+        const a = sourcePlotRect;
+        const b = targetPlotRect;
+        const horizGapLeft = Math.min(a.right, b.right);
+        const horizGapRight = Math.max(a.left, b.left);
+        const vertGapTop = Math.min(a.bottom, b.bottom);
+        const vertGapBottom = Math.max(a.top, b.top);
+
+        if (horizGapLeft < horizGapRight) {
+          const top = Math.max(a.top, b.top);
+          const bottom = Math.min(a.bottom, b.bottom);
+          if (top < bottom) {
+            clipRects.push(
+              toLocalRect(
+                new DOMRect(horizGapLeft, top, horizGapRight - horizGapLeft, bottom - top),
+              ),
+            );
+          }
+        } else if (vertGapTop < vertGapBottom) {
+          const left = Math.max(a.left, b.left);
+          const right = Math.min(a.right, b.right);
+          if (left < right) {
+            clipRects.push(
+              toLocalRect(
+                new DOMRect(left, vertGapTop, right - left, vertGapBottom - vertGapTop),
+              ),
+            );
+          }
+        }
+      }
+
+      if (clipRects.length === 0) clipRects.push(fallback);
+
       setArrowPath({
         d,
-        startX: minX - padding,
-        startY: minY - padding,
+        startX: wrapperLeft,
+        startY: wrapperTop,
         endX: targetCenterX,
         endY: targetCenterY,
         width,
         height,
+        clipRects,
       });
     };
 
     updateArrowPath();
 
-    // Update on scroll or resize
+    // Update on scroll (capture so inner-plot scrolls fire too) or resize.
     window.addEventListener('scroll', updateArrowPath, true);
     window.addEventListener('resize', updateArrowPath);
 
@@ -120,14 +201,18 @@ export const CurvedPatchArrow: React.FC<CurvedPatchArrowProps> = ({
         }}
       >
         <defs>
-          {/* Clip to viewport */}
-          <clipPath id="viewportClip">
-            <rect 
-              x={Math.max(0, -arrowPath.startX)} 
-              y={Math.max(0, -arrowPath.startY)} 
-              width={window.innerWidth} 
-              height={window.innerHeight} 
-            />
+          {/* Clip to the union of the two heatmap scroll containers so the
+              arrow can't extend past either plot when the user scrolls. */}
+          <clipPath id="plotClip">
+            {arrowPath.clipRects.map((r, i) => (
+              <rect
+                key={i}
+                x={r.x}
+                y={r.y}
+                width={r.width}
+                height={r.height}
+              />
+            ))}
           </clipPath>
 
           <marker
@@ -162,7 +247,7 @@ export const CurvedPatchArrow: React.FC<CurvedPatchArrowProps> = ({
           fill="none"
           opacity="0.3"
           filter="url(#glow)"
-          clipPath="url(#viewportClip)"
+          clipPath="url(#plotClip)"
           initial={{ pathLength: 0 }}
           animate={{ pathLength: 1 }}
           transition={{ duration: 0.8, ease: "easeInOut" }}
@@ -176,7 +261,7 @@ export const CurvedPatchArrow: React.FC<CurvedPatchArrowProps> = ({
           fill="none"
           strokeDasharray="8 4"
           markerEnd="url(#arrowhead)"
-          clipPath="url(#viewportClip)"
+          clipPath="url(#plotClip)"
           initial={{ pathLength: 0, opacity: 0 }}
           animate={{ pathLength: 1, opacity: 1 }}
           transition={{ duration: 0.8, ease: "easeInOut" }}

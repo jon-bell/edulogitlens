@@ -1,47 +1,122 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { HeatmapGrid } from './components/HeatmapGrid';
+import { HeatmapToolbar } from './components/HeatmapToolbar';
 import { TokenPredictionPanel } from './components/TokenPredictionPanel';
 import { ResultSidebar } from './components/ResultSidebar';
 import { CurvedPatchArrow } from './components/CurvedPatchArrow';
-import { PromptData, Intervention, SelectedCell } from './types';
-import { createMockPromptData, generateInterventionResult } from './utils/mockData';
+import { PromptInput, Intervention, SelectedCell } from './types';
+import type { LogitLensData } from '../LogitLensGrid';
+import { createMockLogitLensData, generateInterventionResult } from './utils/mockData';
 import { motion, AnimatePresence } from 'motion/react';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, Loader2 } from 'lucide-react';
 
-export function CausalMediationExplorer() {
-  const [sourcePrompt] = useState<PromptData>(
-    createMockPromptData(
-      'source',
-      'Source Prompt',
-      'The Eiffel Tower is in France',
-      '#06b6d4',
-      'source'
-    )
+/**
+ * Central color theme — change colors here to update the entire explorer.
+ */
+const THEME = {
+  sourceColor: '#06b6d4',
+  targetColor: '#ec4899',
+  blendColor: '#9333ea',
+} as const;
+
+interface CausalMediationExplorerProps {
+  sourcePromptText?: string;
+  targetPromptText?: string;
+  sourceData?: LogitLensData;
+  targetData?: LogitLensData;
+  onIntervention?: (i: Intervention) => Promise<LogitLensData | null> | void;
+  resultData?: LogitLensData | null;
+  isInterventionPending?: boolean;
+}
+
+export function CausalMediationExplorer({
+  sourcePromptText = 'The Eiffel Tower is in France',
+  targetPromptText = 'The Big Ben is in England',
+  sourceData,
+  targetData,
+  onIntervention,
+  resultData: controlledResultData,
+  isInterventionPending = false,
+}: CausalMediationExplorerProps = {}) {
+  const sourcePrompt = useMemo<PromptInput>(
+    () => ({
+      id: 'source',
+      name: 'Source Prompt',
+      color: THEME.sourceColor,
+      data: sourceData ?? createMockLogitLensData(sourcePromptText, 'source'),
+    }),
+    [sourceData, sourcePromptText],
   );
 
-  const [originalPrompt] = useState<PromptData>(
-    createMockPromptData(
-      'original',
-      'Original Prompt',
-      'The Big Ben is in England',
-      '#ec4899',
-      'original'
-    )
+  const targetPrompt = useMemo<PromptInput>(
+    () => ({
+      id: 'target',
+      name: 'Target Prompt',
+      color: THEME.targetColor,
+      data: targetData ?? createMockLogitLensData(targetPromptText, 'target'),
+    }),
+    [targetData, targetPromptText],
   );
 
   const [intervention, setIntervention] = useState<Intervention | null>(null);
-  const [resultPrompt, setResultPrompt] = useState<PromptData | null>(null);
+  const [internalResultData, setInternalResultData] = useState<LogitLensData | null>(null);
   const [selectedCell, setSelectedCell] = useState<SelectedCell | null>(null);
   const [resultSelectedCell, setResultSelectedCell] = useState<SelectedCell | null>(null);
   const [sourceHighlightRef, setSourceHighlightRef] = useState<HTMLElement | null>(null);
   const [targetHighlightRef, setTargetHighlightRef] = useState<HTMLElement | null>(null);
 
+  // When the parent passes `resultData` (controlled), it is the source of truth.
+  //   - non-null LogitLensData: render it
+  //   - null:                   render nothing (parent explicitly cleared)
+  //   - undefined:              fall back to internal state (uncontrolled)
+  const isResultControlled = controlledResultData !== undefined;
+  const resultData: LogitLensData | null = isResultControlled
+    ? controlledResultData ?? null
+    : internalResultData;
+
+  // Shared toolbar state — both grids share zoom, tokenStep, layerStep.
+  const [zoom, setZoom] = useState(100);
+  const [tokenStep, setTokenStep] = useState(1);
+  const [layerStep, setLayerStep] = useState(1);
+
+  const countVisible = (total: number, step: number) => {
+    let n = 0;
+    for (let i = 0; i < total; i++) {
+      if (i % step === 0 || i === total - 1) n++;
+    }
+    return n;
+  };
+
+  const sourceVisibleTokens = countVisible(sourcePrompt.data.tokens.length, tokenStep);
+  const sourceVisibleLayers = countVisible(sourcePrompt.data.layers.length, layerStep);
+  const targetVisibleTokens = countVisible(targetPrompt.data.tokens.length, tokenStep);
+  const targetVisibleLayers = countVisible(targetPrompt.data.layers.length, layerStep);
+  const toolbarSummary = `Source: ${sourceVisibleTokens} tok × ${sourceVisibleLayers} layers | Target: ${targetVisibleTokens} tok × ${targetVisibleLayers} layers`;
+
+  // Reset intervention/selection state only when the *content* of the prompts
+  // actually changes (user edited the prompt text). Keying on the object
+  // identity of `sourcePrompt`/`targetPrompt` would make this effect fire on
+  // every parent re-reference — e.g. when a downstream query refetch hands
+  // back a new `sourceData` reference with identical tokens — which would
+  // clobber an in-flight intervention right after it resolved.
+  const promptsKey = JSON.stringify([
+    sourcePrompt.data.tokens,
+    targetPrompt.data.tokens,
+  ]);
+
+  useEffect(() => {
+    setIntervention(null);
+    setInternalResultData(null);
+    setSelectedCell(null);
+    setResultSelectedCell(null);
+  }, [promptsKey]);
+
   const handleDrop = (item: any, targetTokenPos: number, targetLayer: number) => {
     const newIntervention: Intervention = {
       sourcePromptId: item.promptId,
-      targetPromptId: originalPrompt.id,
+      targetPromptId: targetPrompt.id,
       sourceLayer: item.layer,
       sourceTokenPosition: item.tokenPosition,
       targetLayer,
@@ -50,216 +125,350 @@ export function CausalMediationExplorer() {
 
     setIntervention(newIntervention);
 
+    if (onIntervention) {
+      // Controlled path: parent owns the real result.
+      const maybePromise = onIntervention(newIntervention);
+      if (maybePromise && typeof (maybePromise as Promise<LogitLensData | null>).then === 'function') {
+        (maybePromise as Promise<LogitLensData | null>).then((resolved) => {
+          // If parent resolves with real data, populate internal state.
+          // If null/undefined, parent is driving via the `resultData` prop — no-op.
+          if (resolved) {
+            setInternalResultData(resolved);
+          }
+        });
+      }
+      return;
+    }
+
+    // Uncontrolled path: use the built-in mock result generator.
     const result = generateInterventionResult(
-      originalPrompt,
+      sourcePrompt.data,
+      targetPrompt.data,
       item.tokenPosition,
       item.layer,
       targetTokenPos,
-      targetLayer
+      targetLayer,
     );
-
-    setResultPrompt(result);
+    setInternalResultData(result);
   };
 
   const handleReset = () => {
     setIntervention(null);
-    setResultPrompt(null);
+    // Reset is UI-only: just clear internal state. Parent-controlled `resultData`
+    // is not touched here (parent can observe intervention via onIntervention if needed).
+    setInternalResultData(null);
     setSelectedCell(null);
     setResultSelectedCell(null);
   };
 
   const handleCellClick = (promptId: string, tokenPosition: number, layer: number) => {
-    let prompt: PromptData | null = null;
+    let data: LogitLensData | null = null;
 
     if (promptId === sourcePrompt.id) {
-      prompt = sourcePrompt;
-    } else if (promptId === originalPrompt.id) {
-      prompt = originalPrompt;
-    } else if (promptId === 'result' && resultPrompt) {
-      prompt = resultPrompt;
+      data = sourcePrompt.data;
+    } else if (promptId === targetPrompt.id) {
+      data = targetPrompt.data;
+    } else if (promptId === 'result' && resultData) {
+      data = resultData;
     }
 
-    if (prompt) {
-      const cell = prompt.heatmapData[tokenPosition]?.find(c => c.layer === layer);
-      if (cell) {
-        setSelectedCell({
-          tokenPosition,
-          layer,
-          topTokens: cell.topTokens,
-          promptId,
-        });
-      }
-    }
+    if (!data) return;
+    const layerIdx = data.layers.indexOf(layer);
+    const cell = data.data[tokenPosition]?.[layerIdx];
+    if (!cell) return;
+
+    setSelectedCell({
+      tokenPosition,
+      layer,
+      topTokens: cell.topTokens,
+      promptId,
+    });
   };
 
   const handleResultCellClick = (tokenPosition: number, layer: number) => {
-    if (resultPrompt) {
-      const cell = resultPrompt.heatmapData[tokenPosition]?.find(c => c.layer === layer);
-      if (cell) {
-        setResultSelectedCell({
-          tokenPosition,
-          layer,
-          topTokens: cell.topTokens,
-          promptId: 'result',
-        });
-      }
-    }
+    if (!resultData) return;
+    const layerIdx = resultData.layers.indexOf(layer);
+    const cell = resultData.data[tokenPosition]?.[layerIdx];
+    if (!cell) return;
+
+    setResultSelectedCell({
+      tokenPosition,
+      layer,
+      topTokens: cell.topTokens,
+      promptId: 'result',
+    });
   };
 
+  // Auto-select last token / last layer of the result prompt
   useEffect(() => {
-    if (resultPrompt) {
-      const lastTokenIdx = resultPrompt.heatmapData.length - 1;
-      const lastTokenRow = resultPrompt.heatmapData[lastTokenIdx];
-      const lastLayer = resultPrompt.layers[resultPrompt.layers.length - 1].layer;
-      const lastCell = lastTokenRow.find(c => c.layer === lastLayer);
-
-      if (lastCell) {
-        setResultSelectedCell({
-          tokenPosition: lastTokenIdx,
-          layer: lastLayer,
-          topTokens: lastCell.topTokens,
-          promptId: 'result',
-        });
-      }
+    if (!resultData) return;
+    const lastTokenIdx = resultData.data.length - 1;
+    const lastLayer = resultData.layers[resultData.layers.length - 1];
+    const lastLayerIdx = resultData.layers.length - 1;
+    const lastCell = resultData.data[lastTokenIdx]?.[lastLayerIdx];
+    if (lastCell) {
+      setResultSelectedCell({
+        tokenPosition: lastTokenIdx,
+        layer: lastLayer,
+        topTokens: lastCell.topTokens,
+        promptId: 'result',
+      });
     }
-  }, [resultPrompt]);
+  }, [resultData]);
+
+  const resultPromptInput = useMemo<PromptInput | null>(
+    () =>
+      resultData
+        ? {
+            id: 'result',
+            name: 'Result (Intervened)',
+            color: targetPrompt.color,
+            data: resultData,
+          }
+        : null,
+    [resultData, targetPrompt.color],
+  );
 
   return (
     <DndProvider backend={HTML5Backend}>
-      <div className="p-8">
-        <div className="max-w-[1400px] mx-auto space-y-6">
-          {/* Header */}
-          <div className="text-center space-y-2">
-            <h1 className="text-4xl font-bold text-gray-900">
-              Causal Mediation Explorer
-            </h1>
-            <p className="text-lg text-gray-600">
-              Interactive heatmap visualization of mechanistic interpretability
-            </p>
+      <div className="p-4">
+        <div className="max-w-[1400px] mx-auto space-y-3">
+          {/* Shared toolbar for both grids */}
+          <div className="bg-white rounded-xl shadow border border-gray-200 overflow-hidden">
+            <HeatmapToolbar
+              zoom={zoom}
+              onZoomChange={setZoom}
+              tokenStep={tokenStep}
+              onTokenStepChange={setTokenStep}
+              layerStep={layerStep}
+              onLayerStepChange={setLayerStep}
+              summary={toolbarSummary}
+            />
           </div>
 
           {/* Side-by-side prompts */}
-          <div className="grid grid-cols-2 gap-6">
-            <HeatmapGrid
-              prompt={sourcePrompt}
-              highlightCell={
-                intervention
-                  ? { tokenPosition: intervention.sourceTokenPosition, layer: intervention.sourceLayer }
-                  : undefined
-              }
-              selectedCell={selectedCell}
-              onCellClick={(tokenPos, layer) => handleCellClick(sourcePrompt.id, tokenPos, layer)}
-              onHighlightRefChange={setSourceHighlightRef}
-            />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+              gap: '1.5rem',
+            }}
+          >
+            <div className="min-w-0 w-full">
+              <HeatmapGrid
+                prompt={sourcePrompt}
+                zoom={zoom}
+                tokenStep={tokenStep}
+                layerStep={layerStep}
+                highlightCell={
+                  intervention
+                    ? {
+                        tokenPosition: intervention.sourceTokenPosition,
+                        layer: intervention.sourceLayer,
+                      }
+                    : undefined
+                }
+                selectedCell={selectedCell}
+                onCellClick={(tokenPos, layer) =>
+                  handleCellClick(sourcePrompt.id, tokenPos, layer)
+                }
+                onHighlightRefChange={setSourceHighlightRef}
+              />
+            </div>
 
-            <HeatmapGrid
-              prompt={originalPrompt}
-              isDropTarget={true}
-              onDrop={handleDrop}
-              highlightCell={
-                intervention
-                  ? { tokenPosition: intervention.targetTokenPosition, layer: intervention.targetLayer }
-                  : undefined
-              }
-              selectedCell={selectedCell}
-              onCellClick={(tokenPos, layer) => handleCellClick(originalPrompt.id, tokenPos, layer)}
-              onHighlightRefChange={setTargetHighlightRef}
-            />
+            <div className="min-w-0 w-full">
+              <HeatmapGrid
+                prompt={targetPrompt}
+                zoom={zoom}
+                tokenStep={tokenStep}
+                layerStep={layerStep}
+                isDropTarget={true}
+                onDrop={handleDrop}
+                highlightCell={
+                  intervention
+                    ? {
+                        tokenPosition: intervention.targetTokenPosition,
+                        layer: intervention.targetLayer,
+                      }
+                    : undefined
+                }
+                selectedCell={selectedCell}
+                onCellClick={(tokenPos, layer) =>
+                  handleCellClick(targetPrompt.id, tokenPos, layer)
+                }
+                onHighlightRefChange={setTargetHighlightRef}
+              />
+            </div>
           </div>
 
-          {/* Curved Patch Arrow */}
           {intervention && sourceHighlightRef && targetHighlightRef && (
             <CurvedPatchArrow
               sourceRef={sourceHighlightRef}
               targetRef={targetHighlightRef}
               sourceColor={sourcePrompt.color}
-              targetColor={originalPrompt.color}
-              blendedColor="#9333ea"
+              targetColor={targetPrompt.color}
+              blendedColor={THEME.blendColor}
             />
           )}
 
-          {/* Result Diagram */}
           <AnimatePresence>
-            {resultPrompt && intervention && (
+            {resultPromptInput && intervention && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ duration: 0.5 }}
-                className="relative mt-8"
+                className="relative mt-8 min-w-0"
               >
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
+                <div className="pt-4 flex flex-col items-center gap-3">
                   <button
                     onClick={handleReset}
-                    className="flex items-center gap-2 px-4 py-2 bg-gray-800 text-white rounded-full shadow-lg hover:bg-gray-700 transition-colors"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      backgroundColor: '#1f2937',
+                      color: '#ffffff',
+                      padding: '6px 14px',
+                      borderRadius: '9999px',
+                      border: '1px solid rgba(0,0,0,0.1)',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      transition: 'background-color 150ms, box-shadow 150ms',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#374151';
+                      e.currentTarget.style.boxShadow = '0 3px 6px rgba(0,0,0,0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#1f2937';
+                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.15)';
+                    }}
                   >
-                    <RotateCcw className="w-4 h-4" />
+                    <RotateCcw className="w-3 h-3" />
                     Reset Intervention
                   </button>
-                </div>
 
-                <div className="pt-8">
-                  <div className="mb-4 text-center">
-                    <div className="inline-flex items-center gap-3 bg-gradient-to-r from-cyan-500 via-purple-500 to-pink-500 text-white px-6 py-3 rounded-full font-semibold shadow-lg">
-                      <span className="flex items-center gap-2">
-                        <span className="w-4 h-4 rounded-full bg-cyan-300" />
-                        [{intervention.sourceTokenPosition}, L{intervention.sourceLayer}]
-                      </span>
-                      <span className="text-2xl">&rarr;</span>
-                      <span className="flex items-center gap-2">
-                        <span className="w-4 h-4 rounded-full bg-pink-300" />
-                        [{intervention.targetTokenPosition}, L{intervention.targetLayer}]
-                      </span>
-                      <span className="text-2xl">=</span>
-                      <span className="flex items-center gap-2">
-                        <span className="w-4 h-4 rounded-full bg-purple-300" />
-                        Blended
-                      </span>
-                    </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '4px 12px',
+                        borderRadius: '9999px',
+                        backgroundColor: sourcePrompt.color,
+                        color: '#ffffff',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          backgroundColor: '#ffffff',
+                        }}
+                      />
+                      [{sourcePrompt.data.tokens[intervention.sourceTokenPosition]}, Layer {intervention.sourceLayer}]
+                    </span>
+                    <span style={{ fontSize: 18, color: '#6b7280' }}>&rarr;</span>
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '4px 12px',
+                        borderRadius: '9999px',
+                        backgroundColor: targetPrompt.color,
+                        color: '#ffffff',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          backgroundColor: '#ffffff',
+                        }}
+                      />
+                      [{targetPrompt.data.tokens[intervention.targetTokenPosition]}, Layer {intervention.targetLayer}]
+                    </span>
                   </div>
 
-                  <HeatmapGrid
-                    prompt={resultPrompt}
-                    highlightCell={{
-                      tokenPosition: intervention.targetTokenPosition,
-                      layer: intervention.targetLayer,
-                    }}
-                    selectedCell={resultSelectedCell}
-                    onCellClick={handleResultCellClick}
-                    isResult={true}
-                    blendColor="#9333ea"
-                    interventionCell={{
-                      tokenPosition: intervention.targetTokenPosition,
-                      layer: intervention.targetLayer,
-                      sourceColor: sourcePrompt.color,
-                    }}
-                    showSidebar={true}
-                    sidebarContent={<ResultSidebar selectedCell={resultSelectedCell} />}
-                  />
+                  <div className="w-full">
+                    <HeatmapGrid
+                      prompt={resultPromptInput}
+                      zoom={zoom}
+                      tokenStep={tokenStep}
+                      layerStep={layerStep}
+                      highlightCell={{
+                        tokenPosition: intervention.targetTokenPosition,
+                        layer: intervention.targetLayer,
+                      }}
+                      selectedCell={resultSelectedCell}
+                      onCellClick={handleResultCellClick}
+                      isResult={true}
+                      blendColor={THEME.blendColor}
+                      interventionCell={{
+                        tokenPosition: intervention.targetTokenPosition,
+                        layer: intervention.targetLayer,
+                        sourceColor: sourcePrompt.color,
+                      }}
+                      showSidebar={true}
+                      sidebarContent={<ResultSidebar selectedCell={resultSelectedCell} />}
+                    />
+                  </div>
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Instructions */}
-          {!resultPrompt && (
+          {/* Loading state: parent is running a backend call for the intervention. */}
+          {isInterventionPending && intervention && !resultData && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+              className="mt-8 flex items-center justify-center py-12 border-2 border-dashed border-gray-300 rounded-xl bg-white/50"
+              role="status"
+              aria-live="polite"
+            >
+              <div className="flex flex-col items-center gap-3 text-gray-500">
+                <Loader2 className="w-6 h-6 animate-spin" />
+                <p className="text-sm">Computing intervention&hellip;</p>
+              </div>
+            </motion.div>
+          )}
+
+          {!resultPromptInput && !(isInterventionPending && intervention) && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="text-center text-gray-500 py-8 border-2 border-dashed border-gray-300 rounded-xl bg-white/50"
+              className="text-center text-gray-500 py-3 border-2 border-dashed border-gray-300 rounded-xl bg-white/50"
             >
-              <p className="text-lg">
-                Drag a cell from the <strong className="text-cyan-600">Source Prompt</strong> heatmap
-                and drop it onto a cell in the <strong className="text-pink-600">Original Prompt</strong>
-              </p>
-              <p className="mt-2">
-                Click any cell to view its top token predictions
+              <p className="text-sm">
+                Drag a cell from the{' '}
+                <strong style={{ color: sourcePrompt.color }}>Source Prompt</strong> onto a cell in the{' '}
+                <strong style={{ color: targetPrompt.color }}>Target Prompt</strong>, or click any cell to view its top token predictions.
               </p>
             </motion.div>
           )}
         </div>
 
-        {/* Token Prediction Panel */}
         <TokenPredictionPanel
           selectedCell={selectedCell}
           onClose={() => setSelectedCell(null)}

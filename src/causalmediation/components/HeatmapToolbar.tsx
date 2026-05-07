@@ -8,8 +8,7 @@ interface HeatmapToolbarProps {
   onTokenStepChange: (step: number) => void;
   layerStep: number;
   onLayerStepChange: (step: number) => void;
-  visibleTokenCount: number;
-  visibleLayerCount: number;
+  summary?: string;
 }
 
 export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
@@ -19,8 +18,7 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
   onTokenStepChange,
   layerStep,
   onLayerStepChange,
-  visibleTokenCount,
-  visibleLayerCount,
+  summary,
 }) => {
   const handleZoomIn = () => {
     onZoomChange(Math.min(200, zoom + 10));
@@ -95,9 +93,9 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
       </div>
 
       {/* Right side: Info display */}
-      <div className="text-sm text-gray-600">
-        Showing <span className="font-semibold">{visibleTokenCount} tokens</span> × <span className="font-semibold">{visibleLayerCount} layers</span>
-      </div>
+      {summary && (
+        <div className="text-sm text-gray-600">{summary}</div>
+      )}
     </div>
   );
 };

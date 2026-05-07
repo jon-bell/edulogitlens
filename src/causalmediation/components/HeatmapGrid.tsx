@@ -1,14 +1,24 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React from 'react';
 import { useDrop } from 'react-dnd';
 import { motion } from 'motion/react';
-import { PromptData, SelectedCell } from '../types';
+import { PromptInput, SelectedCell } from '../types';
 import { HeatmapCell } from './HeatmapCell';
 import { FlowArrow } from './FlowArrow';
 import { VerticalFlowArrow } from './VerticalFlowArrow';
-import { HeatmapToolbar } from './HeatmapToolbar';
+
+const BASE_CELL_WIDTH = 72;
+const BASE_CELL_HEIGHT = 48;
+const BASE_HORIZ_ARROW_WIDTH = 28;
+const BASE_VERT_ARROW_HEIGHT = 16;
+const BASE_TOKEN_COL_WIDTH = 80;
+const BASE_LABEL_FONT = 14;
+const BASE_CELL_FONT = 12;
 
 interface HeatmapGridProps {
-  prompt: PromptData;
+  prompt: PromptInput;
+  zoom: number;
+  tokenStep: number;
+  layerStep: number;
   isDropTarget?: boolean;
   onDrop?: (item: any, targetTokenPos: number, targetLayer: number) => void;
   highlightCell?: { tokenPosition: number; layer: number };
@@ -24,6 +34,9 @@ interface HeatmapGridProps {
 
 export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   prompt,
+  zoom,
+  tokenStep,
+  layerStep,
   isDropTarget = false,
   onDrop,
   highlightCell,
@@ -36,336 +49,534 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   showSidebar = false,
   sidebarContent,
 }) => {
-  const [layerStart, setLayerStart] = useState(0);
-  const [tokenStart, setTokenStart] = useState(0);
-  const [zoom, setZoom] = useState(100);
-  const [tokenStep, setTokenStep] = useState(1);
-  const [layerStep, setLayerStep] = useState(1);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  
-  // Show all layers and tokens by default
-  const visibleLayerCount = Infinity;
-  const visibleTokenCount = Infinity;
-  
-  // Extract layer numbers from LayerState objects and apply stepping
-  const allLayerNumbers = prompt.layers.map(l => l.layer);
-  
-  // Apply layer stepping: take every nth layer based on layerStep
-  const steppedLayers = allLayerNumbers.filter((_, idx) => idx % layerStep === 0);
-  const displayLayers = steppedLayers.slice(layerStart, layerStart === 0 && visibleLayerCount === Infinity ? undefined : layerStart + visibleLayerCount);
-  
-  // Apply token stepping: take every nth token based on tokenStep
-  const steppedTokens = prompt.heatmapData.filter((_, idx) => idx % tokenStep === 0);
-  const displayTokens = steppedTokens.slice(tokenStart, tokenStart === 0 && visibleTokenCount === Infinity ? undefined : tokenStart + visibleTokenCount);
+  const scale = zoom / 100;
+  const cellWidth = BASE_CELL_WIDTH * scale;
+  const cellHeight = BASE_CELL_HEIGHT * scale;
+  const horizArrowWidth = BASE_HORIZ_ARROW_WIDTH * scale;
+  const vertArrowHeight = BASE_VERT_ARROW_HEIGHT * scale;
+  const tokenColWidth = BASE_TOKEN_COL_WIDTH * scale;
+  const labelFontSize = Math.max(10, BASE_LABEL_FONT * scale);
+  const cellFontSize = Math.max(9, BASE_CELL_FONT * scale);
+  const axisTitleFontSize = Math.max(11, labelFontSize * 0.9);
 
-  // Mouse wheel handler for scrolling and zooming
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    const handleWheel = (e: WheelEvent) => {
-      // If holding Ctrl/Cmd, zoom instead of scroll
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        const zoomDelta = e.deltaY > 0 ? -5 : 5; // Use whole number increments
-        setZoom(prev => Math.max(50, Math.min(200, prev + zoomDelta)));
-      }
-      // Otherwise, let native scrolling handle both directions
-    };
-
-    container.addEventListener('wheel', handleWheel, { passive: false });
-    return () => container.removeEventListener('wheel', handleWheel);
-  }, []);
-
-  // Check if this is the exact intervention cell
-  const isInterventionCell = (tokenPos: number, layer: number): boolean => {
-    if (!isResult || !interventionCell) return false;
-    return tokenPos === interventionCell.tokenPosition && layer === interventionCell.layer;
+  const [scrolledX, setScrolledX] = React.useState(false);
+  const [scrolledY, setScrolledY] = React.useState(false);
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollLeft } = e.currentTarget;
+    setScrolledY(scrollTop > 0);
+    setScrolledX(scrollLeft > 0);
   };
 
-  // Helper to determine if a cell is affected by intervention (downstream from intervention)
-  const isCellAffected = (tokenPosition: number, layer: number): boolean => {
-    if (!interventionCell || !isResult) return false;
-    const { tokenPosition: intTokenPos, layer: intLayer } = interventionCell;
-    // Cell is affected if it's to the right OR below the intervention point (but NOT the intervention itself)
+  const scrolledBg = 'rgba(255,255,255,0.9)';
+  // Solid neutral color for the continuous left-axis bar behind token labels.
+  const leftBarColor = '#f9fafb';
+
+  const stickyTopShadow: React.CSSProperties = {
+    borderBottom: '1px solid #d1d5db',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.06)',
+    ...(scrolledY ? { backgroundColor: scrolledBg } : {}),
+  };
+  // Sticky-left elements that sit ON the continuous left bar. They all share
+  // the same solid bar bg color, and a box-shadow below paints the row-gap
+  // area so the bar reads as one continuous vertical sweep rather than N
+  // stacked boxes. The original drop-shadow (2px 0 4px ...) is preserved as
+  // a second shadow layer. When the grid is scrolled horizontally, the rgba
+  // overlay replaces the base color so existing scroll-dim behavior works.
+  const leftBarFill = scrolledX ? scrolledBg : leftBarColor;
+  const stickyLeftShadow: React.CSSProperties = {
+    borderRight: '1px solid #d1d5db',
+    // Downward solid-color shadow (10px) fills vertical row-gaps so the bar
+    // is unbroken; followed by the usual 2px 0 4px drop-shadow on the right.
+    boxShadow: `0 10px 0 0 ${leftBarFill}, 2px 0 4px rgba(0,0,0,0.06)`,
+    backgroundColor: leftBarFill,
+  };
+  // The corner cell's downward shadow should match the bar below it (which
+  // only dims on horizontal scroll), so the below-color tracks leftBarFill
+  // (scrolledX), while its own background dims on either axis scroll.
+  const stickyCornerShadow: React.CSSProperties = {
+    borderBottom: '1px solid #d1d5db',
+    borderRight: '1px solid #d1d5db',
+    boxShadow: `0 10px 0 0 ${leftBarFill}, 2px 2px 4px rgba(0,0,0,0.06)`,
+    backgroundColor: scrolledX || scrolledY ? scrolledBg : leftBarColor,
+  };
+
+  const allLayers = prompt.data.layers;
+  const allTokens = prompt.data.tokens;
+
+  const displayLayerIndices = allLayers
+    .map((_, idx) => idx)
+    .filter((idx) => idx % layerStep === 0 || idx === allLayers.length - 1);
+  const displayLayers = displayLayerIndices.map((i) => allLayers[i]);
+
+  const displayTokenIndices = allTokens
+    .map((_, idx) => idx)
+    .filter((idx) => idx % tokenStep === 0 || idx === allTokens.length - 1);
+  const displayTokens = displayTokenIndices.map((i) => allTokens[i]);
+
+  const isInterventionCell = (tokenPos: number, layerIdx: number): boolean => {
+    if (!isResult || !interventionCell) return false;
     return (
-      (tokenPosition === intTokenPos && layer > intLayer) || // Same token, later layer
-      (tokenPosition > intTokenPos && layer >= intLayer)      // Later token, same or later layer
+      tokenPos === interventionCell.tokenPosition &&
+      allLayers[layerIdx] === interventionCell.layer
     );
   };
 
-  // Get the color for a specific cell
-  const getCellColor = (tokenPosition: number, layer: number): string => {
-    if (isInterventionCell(tokenPosition, layer)) {
-      // Intervention cell gets source color
+  const isCellAffected = (tokenPos: number, layerIdx: number): boolean => {
+    if (!interventionCell || !isResult) return false;
+    const intLayerIdx = allLayers.indexOf(interventionCell.layer);
+    const intTokenPos = interventionCell.tokenPosition;
+    return (
+      (tokenPos === intTokenPos && layerIdx > intLayerIdx) ||
+      (tokenPos > intTokenPos && layerIdx >= intLayerIdx)
+    );
+  };
+
+  const getBaseColor = (tokenPos: number, layerIdx: number): string => {
+    if (isInterventionCell(tokenPos, layerIdx)) {
       return interventionCell?.sourceColor || prompt.color;
     }
-    if (isCellAffected(tokenPosition, layer)) {
-      // Affected cells get blended color
+    if (isCellAffected(tokenPos, layerIdx)) {
       return blendColor || prompt.color;
     }
-    // Unaffected cells keep original color
     return prompt.color;
   };
 
-  // Calculate animation delay for cascade effect
-  const getAnimationDelay = (tokenPos: number, layer: number): number => {
+  const getAnimationDelay = (tokenPos: number, layerIdx: number): number => {
     if (!interventionCell) return 0;
-    
-    const layerIdx = displayLayers.indexOf(layer);
-    const interventionLayerIdx = displayLayers.indexOf(interventionCell.layer);
-    
-    const layerDistance = Math.max(0, layerIdx - interventionLayerIdx);
+    const intLayerIdx = allLayers.indexOf(interventionCell.layer);
+    const layerDistance = Math.max(0, layerIdx - intLayerIdx);
     const tokenDistance = Math.max(0, tokenPos - interventionCell.tokenPosition);
-    
-    // Delay based on distance from intervention point
-    return (layerDistance + tokenDistance) * 0.1;
+    return (layerDistance + tokenDistance) * 0.08;
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
-      <div className={showSidebar ? "flex" : ""}>
-        {/* Main Grid Area */}
-        <div className={showSidebar ? "flex-1 min-w-0" : ""}>
-          {/* Header */}
-          <div className="flex items-center justify-between px-6 pt-6 pb-4">
-            <div>
-              <h3 className="text-lg font-bold">{prompt.name}</h3>
-              <p className="text-sm text-gray-600 italic">"{prompt.text}"</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <div
-                className="w-6 h-6 rounded-full border-2"
-                style={{ backgroundColor: prompt.color, borderColor: prompt.color }}
-              />
-            </div>
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden min-w-0 w-full">
+      <div className={showSidebar ? 'flex min-w-0 w-full' : 'w-full min-w-0'}>
+        <div className={showSidebar ? 'flex-1 min-w-0' : 'w-full min-w-0'}>
+          {/* Compact label strip */}
+          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-800">{prompt.name}</h3>
+            <div
+              className="w-3 h-3 rounded-full"
+              style={{ backgroundColor: prompt.color }}
+            />
           </div>
 
-          {/* Toolbar */}
-          <HeatmapToolbar
-            zoom={zoom}
-            onZoomChange={setZoom}
-            tokenStep={tokenStep}
-            onTokenStepChange={setTokenStep}
-            layerStep={layerStep}
-            onLayerStepChange={setLayerStep}
-            visibleTokenCount={displayTokens.length}
-            visibleLayerCount={displayLayers.length}
-          />
-
-          {/* Grid */}
-          <div 
-            ref={scrollContainerRef}
-            className="overflow-x-auto px-6 pb-6" 
-            style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top left' }}
+          <div
+            className="overflow-auto px-4 pb-4 w-full"
+            style={{ maxHeight: '60vh', position: 'relative' }}
+            onScroll={handleScroll}
           >
             <div className="inline-block min-w-full pt-4">
-              {/* Rows (tokens) */}
-              {displayTokens.map((row, displayIdx) => {
-                const tokenPos = tokenStart + displayIdx;
-                return (
-                <div key={tokenPos}>
-                  <div className="flex items-center mb-2">
-                    {/* Row label (input token) */}
-                    <div className="w-20 shrink-0 pr-3 text-right text-lg font-medium text-gray-700">
-                      {prompt.inputTokens[tokenPos]}
+              {/* X-axis title (top) — scrolls with content, not sticky */}
+              <div className="flex items-center mb-1">
+                <div className="shrink-0" style={{ width: tokenColWidth }} />
+                <div
+                  style={{
+                    flex: 1,
+                    textAlign: 'center',
+                    fontSize: axisTitleFontSize,
+                    fontWeight: 600,
+                    color: '#4b5563',
+                  }}
+                >
+                  Layer
+                </div>
+              </div>
+              {/* Sticky layer-number row at top */}
+              <div
+                className="flex items-center mb-2"
+                style={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 2,
+                  ...(scrolledY ? { backgroundColor: scrolledBg } : {}),
+                }}
+              >
+                {/* Top-left corner cell: sticky on both axes */}
+                <div
+                  className="shrink-0"
+                  style={{
+                    width: tokenColWidth,
+                    height: Math.max(24, cellHeight * 0.6),
+                    position: 'sticky',
+                    left: 0,
+                    top: 0,
+                    zIndex: 3,
+                    ...stickyCornerShadow,
+                  }}
+                />
+                {displayLayers.map((layerValue, idx) => (
+                  <div
+                    key={`top-${layerValue}`}
+                    className="flex items-center"
+                    style={stickyTopShadow}
+                  >
+                    <div
+                      className="text-center font-bold text-gray-800"
+                      style={{
+                        width: cellWidth,
+                        height: Math.max(24, cellHeight * 0.6),
+                        fontSize: labelFontSize,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {layerValue}
                     </div>
-
-                    {/* Cells with horizontal arrows */}
-                    {displayLayers.map((layer, layerIdx) => {
-                      const cell = row.find(c => c.layer === layer);
-                      if (!cell) return null;
-                      
-                      const isSelected = 
-                        selectedCell?.promptId === prompt.id &&
-                        selectedCell?.tokenPosition === cell.tokenPosition &&
-                        selectedCell?.layer === cell.layer;
-
-                      const isHighlight =
-                        highlightCell?.tokenPosition === cell.tokenPosition &&
-                        highlightCell?.layer === cell.layer;
-
-                      const cellColor = getCellColor(cell.tokenPosition, cell.layer);
-                      const isIntervention = isInterventionCell(cell.tokenPosition, cell.layer);
-                      const isAffected = isCellAffected(cell.tokenPosition, cell.layer);
-                      const animationDelay = getAnimationDelay(cell.tokenPosition, cell.layer);
-
-                      // Horizontal arrow uses the color of the CURRENT cell (where it's coming from)
-                      // Don't show arrow if NEXT cell is the intervention point (arrows don't flow INTO intervention)
-                      const nextLayer = layerIdx < displayLayers.length - 1 ? displayLayers[layerIdx + 1] : null;
-                      const nextIsIntervention = nextLayer ? isInterventionCell(cell.tokenPosition, nextLayer) : false;
-                      
-                      // If we're AT the intervention cell, arrow going out should be source color (not blended)
-                      const horizontalArrowColor = cellColor;
-                      const useBlendedHorizontalArrow = isAffected && !isIntervention; // Don't blend if AT intervention
-                      
-                      return (
-                        <div key={`${cell.tokenPosition}-${cell.layer}`} className="flex items-center">
-                          {isDropTarget ? (
-                            <DropTargetCell
-                              cell={cell}
-                              color={prompt.color}
-                              promptId={prompt.id}
-                              onDrop={onDrop}
-                              isHighlighted={isHighlight}
-                              onCellClick={onCellClick}
-                              isBlended={false}
-                              blendColor={blendColor}
-                              animationDelay={0}
-                              onHighlightRefChange={onHighlightRefChange}
-                            />
-                          ) : (
-                            <HeatmapCell
-                              tokenPosition={cell.tokenPosition}
-                              layer={cell.layer}
-                              predictedToken={cell.predictedToken}
-                              activationStrength={cell.activationStrength}
-                              color={cellColor}
-                              promptId={prompt.id}
-                              isDraggable={!isDropTarget && !isResult}
-                              isSelected={isSelected}
-                              isHighlighted={isHighlight}
-                              isBlended={isIntervention || isAffected}
-                              blendColor={cellColor}
-                              onClick={() => onCellClick?.(cell.tokenPosition, cell.layer)}
-                              animationDelay={animationDelay}
-                              highlightRef={isHighlight ? onHighlightRefChange : undefined}
-                            />
-                          )}
-
-                          {/* Horizontal flow arrow between cells - REMOVED if next cell is intervention point */}
-                          {layerIdx < displayLayers.length - 1 && !nextIsIntervention && (
-                            <FlowArrow
-                              color={horizontalArrowColor}
-                              opacity={0.9}
-                              isBlended={useBlendedHorizontalArrow}
-                              blendColor={horizontalArrowColor}
-                            />
-                          )}
-                          
-                          {/* Spacer where arrow would be if we removed it */}
-                          {layerIdx < displayLayers.length - 1 && nextIsIntervention && (
-                            <div style={{ width: '36px' }} />
-                          )}
-                        </div>
-                      );
-                    })}
+                    {idx < displayLayers.length - 1 && (
+                      <div style={{ width: horizArrowWidth, height: Math.max(24, cellHeight * 0.6) }} />
+                    )}
                   </div>
+                ))}
+              </div>
 
-                  {/* Vertical flow arrows between token rows */}
-                  {displayIdx < displayTokens.length - 1 && (
-                    <div className="flex items-center">
-                      <div className="w-20 shrink-0" />
-                      {displayLayers.map((layer, layerIdx) => {
-                        const currentCellColor = getCellColor(tokenPos, layer);
-                        const nextTokenCellColor = getCellColor(tokenPos + 1, layer);
-                        
-                        // Don't show arrow if NEXT token position (below) is intervention cell
-                        const nextTokenIsIntervention = isInterventionCell(tokenPos + 1, layer);
-                        
-                        // Check if current cell IS the intervention cell
-                        const currentIsIntervention = isInterventionCell(tokenPos, layer);
-                        
-                        // Arrow uses current cell color when flowing out
-                        // If AT intervention cell, don't blend - use source color directly
-                        const useBlendedArrow = !nextTokenIsIntervention && !currentIsIntervention && currentCellColor !== prompt.color;
-                        
+              {displayTokens.map((tokenText, displayRowIdx) => {
+                const tokenPos = displayTokenIndices[displayRowIdx];
+                const isLastDisplayRow = displayRowIdx === displayTokens.length - 1;
+                const nextTokenPos = !isLastDisplayRow
+                  ? displayTokenIndices[displayRowIdx + 1]
+                  : null;
+                return (
+                  <div key={tokenPos}>
+                    <div className="flex items-center mb-2">
+                      <div
+                        className="shrink-0 pr-3 text-right font-medium text-gray-700 truncate"
+                        style={{
+                          width: tokenColWidth,
+                          fontSize: labelFontSize,
+                          position: 'sticky',
+                          left: 0,
+                          zIndex: 1,
+                          ...stickyLeftShadow,
+                        }}
+                        title={tokenText}
+                      >
+                        {tokenText}
+                      </div>
+
+                      {displayLayers.map((layerValue, displayColIdx) => {
+                        const layerIdx = displayLayerIndices[displayColIdx];
+                        const cell = prompt.data.data[tokenPos]?.[layerIdx];
+                        if (!cell) return null;
+
+                        const isSelected =
+                          selectedCell?.promptId === prompt.id &&
+                          selectedCell?.tokenPosition === tokenPos &&
+                          selectedCell?.layer === layerValue;
+
+                        const isHighlight =
+                          highlightCell?.tokenPosition === tokenPos &&
+                          highlightCell?.layer === layerValue;
+
+                        const baseColor = getBaseColor(tokenPos, layerIdx);
+                        const isIntervention = isInterventionCell(tokenPos, layerIdx);
+                        const animationDelay = getAnimationDelay(tokenPos, layerIdx);
+
+                        const nextLayerIdx =
+                          displayColIdx < displayLayers.length - 1
+                            ? displayLayerIndices[displayColIdx + 1]
+                            : null;
+                        const nextIsIntervention =
+                          nextLayerIdx != null && isInterventionCell(tokenPos, nextLayerIdx);
+
                         return (
-                          <div key={`v-arrow-${tokenPos}-${layer}`} className="flex items-center">
-                            {!nextTokenIsIntervention ? (
-                              <VerticalFlowArrow
-                                color={currentCellColor}
-                                opacity={0.9}
-                                isBlended={useBlendedArrow}
-                                blendColor={currentCellColor}
-                              />
-                            ) : (
-                              <div style={{ width: '90px' }} />
+                          <div
+                            key={`${tokenPos}-${layerValue}`}
+                            className="flex items-center"
+                            style={{ flexShrink: 0 }}
+                          >
+                            <div
+                              style={{
+                                width: cellWidth,
+                                height: cellHeight,
+                                flexShrink: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              }}
+                            >
+                              {isDropTarget ? (
+                                <DropTargetCell
+                                  tokenPosition={tokenPos}
+                                  layer={layerValue}
+                                  predictedToken={cell.token}
+                                  probability={cell.probability}
+                                  baseColor={prompt.color}
+                                  promptId={prompt.id}
+                                  onDrop={onDrop}
+                                  isHighlighted={isHighlight}
+                                  isSelected={isSelected}
+                                  onCellClick={onCellClick}
+                                  animationDelay={0}
+                                  onHighlightRefChange={onHighlightRefChange}
+                                  width={cellWidth}
+                                  height={cellHeight}
+                                  fontSize={cellFontSize}
+                                />
+                              ) : (
+                                <HeatmapCell
+                                  tokenPosition={tokenPos}
+                                  layer={layerValue}
+                                  predictedToken={cell.token}
+                                  probability={cell.probability}
+                                  baseColor={baseColor}
+                                  promptId={prompt.id}
+                                  isDraggable={!isDropTarget && !isResult}
+                                  isSelected={isSelected}
+                                  isHighlighted={isHighlight}
+                                  isIntervention={isIntervention}
+                                  onClick={() => onCellClick?.(tokenPos, layerValue)}
+                                  animationDelay={animationDelay}
+                                  highlightRef={isHighlight ? onHighlightRefChange : undefined}
+                                  width={cellWidth}
+                                  height={cellHeight}
+                                  fontSize={cellFontSize}
+                                />
+                              )}
+                            </div>
+
+                            {displayColIdx < displayLayers.length - 1 && !nextIsIntervention && (
+                              <div
+                                style={{
+                                  width: horizArrowWidth,
+                                  flexShrink: 0,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                <FlowArrow color={baseColor} opacity={0.9} />
+                              </div>
                             )}
-                            {layerIdx < displayLayers.length - 1 && (
-                              <div style={{ width: '36px' }} />
+                            {displayColIdx < displayLayers.length - 1 && nextIsIntervention && (
+                              <div style={{ width: horizArrowWidth, flexShrink: 0 }} />
                             )}
                           </div>
                         );
                       })}
                     </div>
-                  )}
-                </div>
-              )})}
 
-              {/* Layer indices at bottom */}
-              <div className="mt-6">
-                <div className="flex items-center">
-                  <div className="w-20 shrink-0" />
-                  <div className="flex items-center">
-                    {displayLayers.map((layer, idx) => (
-                      <div key={layer} className="flex items-center">
-                        <div className="text-center text-base font-bold text-gray-800" style={{ width: '90px' }}>
-                          {layer}
-                        </div>
-                        {idx < displayLayers.length - 1 && (
-                          <div style={{ width: '36px' }} />
-                        )}
+                    {/* Vertical arrow gutter row: a narrow row of height vertArrowHeight
+                        between adjacent token rows. Structure mirrors the token row:
+                        sticky-left spacer of tokenColWidth, then one cellWidth-wide
+                        arrow container per layer, with horizArrowWidth spacers between.
+                        Each arrow container centers the small arrow glyph. The row is
+                        pointer-events: none since arrows are decorative. */}
+                    {!isLastDisplayRow && nextTokenPos != null && (
+                      <div
+                        className="flex items-center"
+                        style={{
+                          marginBottom: 8,
+                          pointerEvents: 'none',
+                        }}
+                      >
+                        {/* Left spacer matching sticky token-label column */}
+                        <div
+                          className="shrink-0"
+                          style={{
+                            width: tokenColWidth,
+                            height: vertArrowHeight,
+                            position: 'sticky',
+                            left: 0,
+                            zIndex: 1,
+                            ...stickyLeftShadow,
+                          }}
+                        />
+                        {displayLayers.map((layerValue, displayColIdx) => {
+                          const layerIdx = displayLayerIndices[displayColIdx];
+                          const suppressIncomingVertical =
+                            isResult &&
+                            interventionCell != null &&
+                            nextTokenPos === interventionCell.tokenPosition &&
+                            layerValue === interventionCell.layer;
+                          const isOutgoingFromIntervention =
+                            isResult &&
+                            interventionCell != null &&
+                            tokenPos === interventionCell.tokenPosition &&
+                            layerValue === interventionCell.layer;
+                          const vertArrowColor = isOutgoingFromIntervention
+                            ? interventionCell!.sourceColor
+                            : getBaseColor(nextTokenPos, layerIdx);
+                          return (
+                            <div
+                              key={`varrow-${tokenPos}-${layerValue}`}
+                              className="flex items-center"
+                            >
+                              <div
+                                style={{
+                                  width: cellWidth,
+                                  height: vertArrowHeight,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                {suppressIncomingVertical ? (
+                                  <div
+                                    style={{
+                                      width: cellWidth,
+                                      height: vertArrowHeight,
+                                      flexShrink: 0,
+                                    }}
+                                  />
+                                ) : (
+                                  <VerticalFlowArrow
+                                    color={vertArrowColor}
+                                  />
+                                )}
+                              </div>
+                              {displayColIdx < displayLayers.length - 1 && (
+                                <div
+                                  style={{
+                                    width: horizArrowWidth,
+                                    height: vertArrowHeight,
+                                  }}
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
-                    ))}
+                    )}
+
                   </div>
-                </div>
-                {/* Layer label below the numbers */}
-                <div className="flex items-center mt-2">
-                  <div className="w-20 shrink-0" />
-                  <div className="text-center" style={{ width: '90px' }}>
-                    <span className="text-sm font-semibold text-gray-600">Layer</span>
+                );
+              })}
+
+              {/* Bottom (non-sticky) layer-number row */}
+              <div
+                className="flex items-center mt-2"
+                style={{ borderTop: '1px solid #e5e7eb' }}
+              >
+                {/* Bottom-left corner spacer: sticky-left to match column */}
+                <div
+                  className="shrink-0"
+                  style={{
+                    width: tokenColWidth,
+                    height: Math.max(24, cellHeight * 0.6),
+                    position: 'sticky',
+                    left: 0,
+                    zIndex: 1,
+                    ...stickyLeftShadow,
+                  }}
+                />
+                {displayLayers.map((layerValue, idx) => (
+                  <div key={`bottom-${layerValue}`} className="flex items-center">
+                    <div
+                      className="text-center font-bold text-gray-800"
+                      style={{
+                        width: cellWidth,
+                        height: Math.max(24, cellHeight * 0.6),
+                        fontSize: labelFontSize,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {layerValue}
+                    </div>
+                    {idx < displayLayers.length - 1 && (
+                      <div style={{ width: horizArrowWidth, height: Math.max(24, cellHeight * 0.6) }} />
+                    )}
                   </div>
+                ))}
+              </div>
+              {/* X-axis title (bottom) */}
+              <div className="flex items-center mt-1">
+                <div className="shrink-0" style={{ width: tokenColWidth }} />
+                <div
+                  style={{
+                    flex: 1,
+                    textAlign: 'center',
+                    fontSize: axisTitleFontSize,
+                    fontWeight: 600,
+                    color: '#4b5563',
+                  }}
+                >
+                  Layer
                 </div>
               </div>
+
             </div>
+          </div>
+
+          {/* Probability color-scale legend — below the scroll container,
+              inside the card. Mirrors the legend pattern from
+              LogitLensGrid.tsx: horizontal gradient from white to the
+              prompt's color, with 0.0 / 1.0 labels flanking it and a
+              "Probability" label on the left. Inline styles are used for
+              the gradient so the workbench's Tailwind JIT doesn't drop it. */}
+          <div
+            className="flex items-center px-4 pb-3 pt-1"
+            style={{ gap: 8 }}
+          >
+            <span style={{ fontSize: 11, fontWeight: 500, color: '#374151' }}>
+              Probability
+            </span>
+            <span style={{ fontSize: 10, color: '#6b7280' }}>0.0</span>
+            <div
+              style={{
+                width: 140,
+                height: 10,
+                background: `linear-gradient(to right, #ffffff 0%, ${prompt.color} 100%)`,
+                borderRadius: 2,
+                border: '1px solid #e5e7eb',
+              }}
+            />
+            <span style={{ fontSize: 10, color: '#6b7280' }}>1.0</span>
           </div>
         </div>
 
-        {/* Sidebar */}
         {showSidebar && (
-          <div className="bg-gray-100 p-4">
-            {sidebarContent}
-          </div>
+          <div className="bg-gray-100 p-4 flex-shrink-0 w-80">{sidebarContent}</div>
         )}
       </div>
     </div>
   );
 };
 
-// Drop target wrapper for cells
 interface DropTargetCellProps {
-  cell: any;
-  color: string;
+  tokenPosition: number;
+  layer: number;
+  predictedToken: string;
+  probability: number;
+  baseColor: string;
   promptId: string;
   onDrop?: (item: any, targetTokenPos: number, targetLayer: number) => void;
   isHighlighted?: boolean;
+  isSelected?: boolean;
   onCellClick?: (tokenPosition: number, layer: number) => void;
-  isBlended?: boolean;
-  blendColor?: string;
   animationDelay?: number;
   onHighlightRefChange?: (ref: HTMLElement | null) => void;
+  width: number;
+  height: number;
+  fontSize: number;
 }
 
 const DropTargetCell: React.FC<DropTargetCellProps> = ({
-  cell,
-  color,
+  tokenPosition,
+  layer,
+  predictedToken,
+  probability,
+  baseColor,
   promptId,
   onDrop,
   isHighlighted,
+  isSelected,
   onCellClick,
-  isBlended,
-  blendColor,
   animationDelay,
   onHighlightRefChange,
+  width,
+  height,
+  fontSize,
 }) => {
   const [{ isOver, canDrop }, drop] = useDrop(
     () => ({
       accept: 'HEATMAP_CELL',
       drop: (item: any) => {
-        if (onDrop) {
-          onDrop(item, cell.tokenPosition, cell.layer);
-        }
+        if (onDrop) onDrop(item, tokenPosition, layer);
         return undefined;
       },
       collect: (monitor) => ({
@@ -373,7 +584,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
         canDrop: monitor.canDrop(),
       }),
     }),
-    [cell, onDrop]
+    [tokenPosition, layer, onDrop],
   );
 
   return (
@@ -384,23 +595,25 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           ${isOver && canDrop ? 'ring-4 ring-green-500 ring-inset z-20' : ''}
           ${canDrop && !isOver ? 'ring-2 ring-blue-400 ring-dashed ring-inset' : ''}
         `}
-        animate={isOver && canDrop ? { scale: 1.1 } : { scale: 1 }}
+        animate={isOver && canDrop ? { scale: 1.08 } : { scale: 1 }}
         transition={{ duration: 0.2 }}
       >
         <HeatmapCell
-          tokenPosition={cell.tokenPosition}
-          layer={cell.layer}
-          predictedToken={cell.predictedToken}
-          activationStrength={cell.activationStrength}
-          color={color}
+          tokenPosition={tokenPosition}
+          layer={layer}
+          predictedToken={predictedToken}
+          probability={probability}
+          baseColor={baseColor}
           promptId={promptId}
           isDraggable={false}
+          isSelected={isSelected}
           isHighlighted={isHighlighted}
-          onClick={() => onCellClick?.(cell.tokenPosition, cell.layer)}
-          isBlended={isBlended}
-          blendColor={blendColor}
+          onClick={() => onCellClick?.(tokenPosition, layer)}
           animationDelay={animationDelay}
           highlightRef={isHighlighted ? onHighlightRefChange : undefined}
+          width={width}
+          height={height}
+          fontSize={fontSize}
         />
       </motion.div>
     </div>

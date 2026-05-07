@@ -6,143 +6,133 @@ interface HeatmapCellProps {
   tokenPosition: number;
   layer: number;
   predictedToken: string;
-  activationStrength: number;
-  color: string;
+  probability: number;
+  baseColor: string;
   promptId: string;
   isDraggable?: boolean;
   isSelected?: boolean;
   isHighlighted?: boolean;
   onClick?: () => void;
-  isBlended?: boolean;
-  blendColor?: string;
+  isIntervention?: boolean;
   animationDelay?: number;
   highlightRef?: (ref: HTMLDivElement | null) => void;
+  width?: number;
+  height?: number;
+  fontSize?: number;
+}
+
+function parseHex(hex: string): { r: number; g: number; b: number } {
+  const clean = hex.replace('#', '');
+  const full = clean.length === 3
+    ? clean.split('').map((c) => c + c).join('')
+    : clean;
+  return {
+    r: parseInt(full.slice(0, 2), 16),
+    g: parseInt(full.slice(2, 4), 16),
+    b: parseInt(full.slice(4, 6), 16),
+  };
+}
+
+export function probabilityToBg(baseColor: string, prob: number): string {
+  const { r, g, b } = parseHex(baseColor);
+  const p = Math.max(0, Math.min(1, prob));
+  const rv = Math.round(255 - (255 - r) * p);
+  const gv = Math.round(255 - (255 - g) * p);
+  const bv = Math.round(255 - (255 - b) * p);
+  return `rgb(${rv}, ${gv}, ${bv})`;
 }
 
 export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   tokenPosition,
   layer,
   predictedToken,
-  activationStrength,
-  color,
+  probability,
+  baseColor,
   promptId,
   isDraggable = false,
   isSelected = false,
   isHighlighted = false,
   onClick,
-  isBlended = false,
-  blendColor,
+  isIntervention = false,
   animationDelay = 0,
   highlightRef,
+  width = 72,
+  height = 48,
+  fontSize = 12,
 }) => {
   const [{ isDragging }, drag] = useDrag(
     () => ({
       type: 'HEATMAP_CELL',
-      item: { tokenPosition, layer, promptId, sourceColor: color },
+      item: { tokenPosition, layer, promptId, sourceColor: baseColor },
       collect: (monitor) => ({
         isDragging: monitor.isDragging(),
       }),
       canDrag: isDraggable,
     }),
-    [tokenPosition, layer, promptId, isDraggable, color]
+    [tokenPosition, layer, promptId, isDraggable, baseColor],
   );
 
-  // Combine drag ref and highlight ref
   const setRefs = React.useCallback(
     (node: HTMLDivElement | null) => {
-      if (isDraggable) {
-        drag(node);
-      }
-      if (isHighlighted && highlightRef) {
-        highlightRef(node);
-      }
+      if (isDraggable) drag(node);
+      if (isHighlighted && highlightRef) highlightRef(node);
     },
-    [drag, isDraggable, isHighlighted, highlightRef]
+    [drag, isDraggable, isHighlighted, highlightRef],
   );
 
-  // Border color represents the residual stream
-  const borderColor = color;
-  const borderWidth = 4;
-
-  // Create a lighter version of the border color for the inner glow
-  const getLighterColor = (hexColor: string) => {
-    // Simple lighter version by adding transparency
-    return `${hexColor}40`; // 25% opacity
-  };
+  const bg = probabilityToBg(baseColor, probability);
+  const textColor = probability < 0.5 ? '#1f2937' : '#ffffff';
 
   return (
-    <div ref={setRefs}>
+    <div
+      ref={setRefs}
+      style={{
+        width,
+        height,
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
       <motion.div
         onClick={onClick}
         className={`
-          relative rounded-xl overflow-hidden
+          relative flex items-center justify-center
           ${isDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}
           ${isDragging ? 'opacity-40' : ''}
-          ${isSelected ? 'ring-4 ring-yellow-400 ring-offset-2' : ''}
-          ${isHighlighted ? 'ring-4 ring-green-400 ring-offset-2 shadow-lg shadow-green-400/50' : ''}
         `}
         style={{
-          width: '90px',
-          height: '70px',
-          backgroundColor: borderColor,
-          padding: `${borderWidth}px`,
-          boxShadow: isBlended 
-            ? `0 6px 20px -3px ${borderColor}80, 0 0 0 1px ${borderColor}40`
-            : `0 3px 12px -2px ${borderColor}60`,
+          width,
+          height,
+          backgroundColor: bg,
+          boxSizing: 'border-box',
+          border: isHighlighted
+            ? `2px solid ${baseColor}`
+            : `1px solid rgba(0,0,0,0.06)`,
+          outline: isSelected ? `2px solid #facc15` : 'none',
+          outlineOffset: isSelected ? 1 : 0,
         }}
-        initial={isBlended ? { scale: 0.85, opacity: 0, rotateY: -15 } : false}
-        animate={isBlended ? { scale: 1, opacity: 1, rotateY: 0 } : {}}
+        initial={isIntervention ? { scale: 0.85, opacity: 0 } : false}
+        animate={isIntervention ? { scale: 1, opacity: 1 } : {}}
         transition={{
           delay: animationDelay,
-          duration: 0.5,
-          ease: [0.34, 1.56, 0.64, 1], // Spring easing
+          duration: 0.4,
+          ease: [0.34, 1.56, 0.64, 1],
         }}
-        whileHover={isDraggable ? { 
-          scale: 1.08,
-          boxShadow: `0 10px 30px -3px ${borderColor}90, 0 0 0 2px ${borderColor}`,
-        } : {}}
+        whileHover={isDraggable ? { scale: 1.05 } : {}}
       >
-        {/* Inner glow */}
-        <div 
-          className="absolute inset-0 rounded-lg pointer-events-none"
+        <span
+          className="font-medium tracking-tight truncate px-1"
           style={{
-            boxShadow: `inset 0 0 16px ${getLighterColor(borderColor)}`,
+            fontSize,
+            color: textColor,
+            maxWidth: width - 4,
           }}
-        />
-        
-        {/* Inner cyan card with gradient */}
-        <div
-          className="relative w-full h-full rounded-lg flex flex-col items-center justify-center overflow-hidden bg-white"
+          title={predictedToken}
         >
-          {/* Subtle texture overlay */}
-          <div 
-            className="absolute inset-0 opacity-[0.03]"
-            style={{
-              backgroundImage: 'radial-gradient(circle at 20% 30%, white 1px, transparent 1px)',
-              backgroundSize: '16px 16px',
-            }}
-          />
-          
-          {/* Token text with shadow for depth */}
-          <span 
-            className="relative text-xl font-bold text-gray-900 tracking-tight"
-            style={{
-              textShadow: '0 1px 4px rgba(0, 0, 0, 0.1)',
-            }}
-          >
-            {predictedToken}
-          </span>
-          
-          {/* Probability bar at bottom */}
-          <div 
-            className="absolute bottom-0 left-0 right-0 h-1.5 rounded-b-lg"
-            style={{
-              width: `${activationStrength * 100}%`,
-              backgroundColor: borderColor,
-              boxShadow: `0 0 4px ${borderColor}80`,
-            }}
-          />
-        </div>
+          {predictedToken}
+        </span>
       </motion.div>
     </div>
   );
