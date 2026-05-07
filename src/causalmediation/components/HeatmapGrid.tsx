@@ -391,14 +391,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                             interventionCell != null &&
                             nextTokenPos === interventionCell.tokenPosition &&
                             layerValue === interventionCell.layer;
-                          const isOutgoingFromIntervention =
-                            isResult &&
-                            interventionCell != null &&
-                            tokenPos === interventionCell.tokenPosition &&
-                            layerValue === interventionCell.layer;
-                          const vertArrowColor = isOutgoingFromIntervention
-                            ? interventionCell!.sourceColor
-                            : getBaseColor(nextTokenPos, layerIdx);
+                          // Color by origin cell, mirroring the horizontal arrow.
+                          // Coloring by destination made arrows from unaffected
+                          // (pink) cells into mixed (purple) cells render purple.
+                          // getBaseColor at the intervention cell already returns
+                          // sourceColor (cyan), so no explicit outgoing override.
+                          const vertArrowColor = getBaseColor(tokenPos, layerIdx);
                           return (
                             <div
                               key={`varrow-${tokenPos}-${layerValue}`}
