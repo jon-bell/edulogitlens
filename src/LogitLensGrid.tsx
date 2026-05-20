@@ -69,15 +69,29 @@ const THEME = {
 
 export type LogitLensVariant = "default" | "compact";
 
+export interface LogitLensHighlight {
+  layer: number;
+  position: number;
+}
+
 interface LogitLensGridProps {
   data: LogitLensData;
   variant?: LogitLensVariant;
+  onCellClick?: (layer: number, position: number) => void;
+  highlight?: LogitLensHighlight | null;
 }
 
-export function LogitLensGrid({ data, variant = "default" }: LogitLensGridProps) {
+export function LogitLensGrid({
+  data,
+  variant = "default",
+  onCellClick,
+  highlight,
+}: LogitLensGridProps) {
   const isCompact = variant === "compact";
+  const isHighlightControlled = highlight !== undefined;
   const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number } | null>(null);
   const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
+  const [internalHighlight, setInternalHighlight] = useState<LogitLensHighlight | null>(null);
   const [showGeneration, setShowGeneration] = useState(false);
   const [zoomLevel, setZoomLevel] = useState<number | null>(null);
   const [tokenStep, setTokenStep] = useState(1);
@@ -98,12 +112,28 @@ export function LogitLensGrid({ data, variant = "default" }: LogitLensGridProps)
   const effectiveZoom = zoomLevel ?? 1;
 
   const handleCellClick = (row: number, col: number) => {
+    const actualPosition = filteredTokenIndices[row];
+    const actualLayer = filteredLayerIndices[col];
+    onCellClick?.(actualLayer, actualPosition);
+
+    if (!isHighlightControlled) {
+      const alreadyHighlighted =
+        internalHighlight?.layer === actualLayer && internalHighlight.position === actualPosition;
+      setInternalHighlight(alreadyHighlighted ? null : { layer: actualLayer, position: actualPosition });
+    }
+
     if (selectedCell?.row === row && selectedCell?.col === col) {
       setSelectedCell(null);
       setShowGeneration(false);
     } else {
       setSelectedCell({ row, col });
       setShowGeneration(false);
+    }
+  };
+
+  const handleOutsideClick = () => {
+    if (!isHighlightControlled) {
+      setInternalHighlight(null);
     }
   };
 
@@ -136,9 +166,32 @@ export function LogitLensGrid({ data, variant = "default" }: LogitLensGridProps)
     .filter((idx) => idx % layerStep === 0 || idx === data.layers.length - 1);
   const filteredLayers = filteredLayerIndices.map(idx => data.layers[idx]);
   
-  const filteredData = filteredTokenIndices.map(tokenIdx => 
+  const filteredData = filteredTokenIndices.map(tokenIdx =>
     filteredLayerIndices.map(layerIdx => data.data[tokenIdx][layerIdx])
   );
+
+  const effectiveHighlight: LogitLensHighlight | null = isHighlightControlled
+    ? highlight ?? null
+    : internalHighlight;
+
+  // Translate the (layer, position) public API to the widget's internal (row=position, col=layer) indexing,
+  // accounting for the user's token/layer step filtering. If the highlighted target was filtered out we
+  // hide the overlay rather than snapping to a different cell.
+  const highlightRow = effectiveHighlight
+    ? filteredTokenIndices.indexOf(effectiveHighlight.position)
+    : -1;
+  const highlightCol = effectiveHighlight
+    ? filteredLayerIndices.indexOf(effectiveHighlight.layer)
+    : -1;
+  const hasHighlight = highlightRow >= 0 && highlightCol >= 0;
+  const useNewHighlightLayer = isHighlightControlled || onCellClick !== undefined;
+
+  const isContextCell = (row: number, col: number) =>
+    hasHighlight && row <= highlightRow && col <= highlightCol;
+  const isGeneratedStackCell = (row: number, col: number) =>
+    hasHighlight && row === highlightRow;
+  const isHighlightTarget = (row: number, col: number) =>
+    hasHighlight && row === highlightRow && col === highlightCol;
 
   // Validate selected cell is within bounds
   const isValidSelection = selectedCell && 
@@ -276,7 +329,15 @@ export function LogitLensGrid({ data, variant = "default" }: LogitLensGridProps)
       {/* Main content area with heatmap box and side panel */}
       <div style={{ flex: '1 1 0px', display: 'flex', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
         {/* Heatmap box — scrolls independently, never affects siblings */}
-        <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: '16rem', overflow: 'auto', padding: '1.5rem', scrollBehavior: 'smooth', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}>
+        <div
+          onClick={(e) => {
+            const target = e.target as HTMLElement | null;
+            if (target && !target.closest('.logitlens-heatmap-cell')) {
+              handleOutsideClick();
+            }
+          }}
+          style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: '16rem', overflow: 'auto', padding: '1.5rem', scrollBehavior: 'smooth', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}
+        >
           {/* Horizontal color scale legend — above the heatmap */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <span style={{ fontSize: 11, fontWeight: 500, color: THEME.textBody }}>Probability</span>
@@ -386,6 +447,9 @@ export function LogitLensGrid({ data, variant = "default" }: LogitLensGridProps)
                       const hasRedBox = shouldShowRedBox(displayRowIdx, displayColIdx);
                       const hasSelectedBox = shouldShowSelectedBox(displayRowIdx, displayColIdx);
                       const isSelected = selectedCell?.row === displayRowIdx && selectedCell?.col === displayColIdx;
+                      const inContext = useNewHighlightLayer && isContextCell(displayRowIdx, displayColIdx);
+                      const inGenerated = useNewHighlightLayer && isGeneratedStackCell(displayRowIdx, displayColIdx);
+                      const isHighlightTargetCell = useNewHighlightLayer && isHighlightTarget(displayRowIdx, displayColIdx);
 
                       return (
                         <div
@@ -435,6 +499,28 @@ export function LogitLensGrid({ data, variant = "default" }: LogitLensGridProps)
                             <div
                               className="logitlens-heatmap-overlay logitlens-heatmap-overlay-yellow absolute inset-0 border-yellow-400 pointer-events-none"
                               style={{ borderWidth: Math.max(4, 4 * effectiveZoom) }}
+                            />
+                          )}
+                          {inContext && !isHighlightTargetCell && (
+                            <div
+                              className="logitlens-heatmap-overlay logitlens-heatmap-overlay-context absolute inset-0 pointer-events-none"
+                              style={{ backgroundColor: 'rgba(136, 68, 255, 0.08)' }}
+                            />
+                          )}
+                          {inGenerated && !isHighlightTargetCell && (
+                            <div
+                              className="logitlens-heatmap-overlay logitlens-heatmap-overlay-generated absolute inset-0 pointer-events-none"
+                              style={{
+                                boxShadow: `inset 0 0 0 ${Math.max(2, 2 * effectiveZoom)}px rgba(136, 68, 255, 0.55)`,
+                              }}
+                            />
+                          )}
+                          {isHighlightTargetCell && (
+                            <div
+                              className="logitlens-heatmap-overlay logitlens-heatmap-overlay-highlight absolute inset-0 pointer-events-none"
+                              style={{
+                                boxShadow: `inset 0 0 0 ${Math.max(3, 3 * effectiveZoom)}px ${THEME.primary}`,
+                              }}
                             />
                           )}
                         </div>
