@@ -547,12 +547,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
 
       {/* Token Generation overlay - covers entire component */}
       <AnimatePresence>
-        {(() => {
-          // #region agent log
-          if (typeof fetch !== 'undefined') { fetch('http://127.0.0.1:7244/ingest/fc915240-872e-4c1a-aef6-bf81d338a109',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LogitLensGrid.tsx:gen-panel',message:'Generation panel visibility',data:{showGeneration,isValidSelection:!!isValidSelection,selectedCell:selectedCell??null,filteredLayerAtCol:selectedCell!=null?filteredLayerIndices[selectedCell.col]:null,filteredTokenAtRow:selectedCell!=null?filteredTokenIndices[selectedCell.row]:null},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{}); }
-          // #endregion
-          return showGeneration && isValidSelection && selectedCell;
-        })() && (
+        {showGeneration && isValidSelection && selectedCell && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
