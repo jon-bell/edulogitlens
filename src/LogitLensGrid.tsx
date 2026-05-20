@@ -79,6 +79,11 @@ export interface LogitLensScrollState {
   scrollTop: number;
 }
 
+export type LogitLensTooltipTarget =
+  | { kind: "cell"; layer: number; position: number }
+  | { kind: "column"; position: number }
+  | { kind: "layer"; layer: number };
+
 interface LogitLensGridProps {
   data: LogitLensData;
   variant?: LogitLensVariant;
@@ -86,6 +91,7 @@ interface LogitLensGridProps {
   highlight?: LogitLensHighlight | null;
   onScroll?: (state: LogitLensScrollState) => void;
   scrollState?: LogitLensScrollState;
+  tooltipFor?: (target: LogitLensTooltipTarget) => ReactNode;
 }
 
 export function LogitLensGrid({
@@ -95,6 +101,7 @@ export function LogitLensGrid({
   highlight,
   onScroll,
   scrollState,
+  tooltipFor,
 }: LogitLensGridProps) {
   const isCompact = variant === "compact";
   const isHighlightControlled = highlight !== undefined;
@@ -102,6 +109,11 @@ export function LogitLensGrid({
   const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number } | null>(null);
   const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
   const [internalHighlight, setInternalHighlight] = useState<LogitLensHighlight | null>(null);
+  const [tooltipState, setTooltipState] = useState<{
+    target: LogitLensTooltipTarget;
+    x: number;
+    y: number;
+  } | null>(null);
   const [showGeneration, setShowGeneration] = useState(false);
   const [zoomLevel, setZoomLevel] = useState<number | null>(null);
   const [tokenStep, setTokenStep] = useState(1);
@@ -158,6 +170,31 @@ export function LogitLensGrid({
     if (!isHighlightControlled) {
       setInternalHighlight(null);
     }
+  };
+
+  const handleTooltipEnter = (
+    target: LogitLensTooltipTarget,
+    e: React.MouseEvent<HTMLElement>,
+  ) => {
+    if (!tooltipFor) return;
+    const rect = (containerRef.current ?? e.currentTarget).getBoundingClientRect();
+    setTooltipState({
+      target,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
+  const handleTooltipMove = (e: React.MouseEvent<HTMLElement>) => {
+    if (!tooltipFor || !tooltipState) return;
+    const rect = (containerRef.current ?? e.currentTarget).getBoundingClientRect();
+    setTooltipState({
+      target: tooltipState.target,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
+  const handleTooltipLeave = () => {
+    if (tooltipState) setTooltipState(null);
   };
 
   const handleZoomIn = () => setZoomLevel(prev => Math.min((prev ?? 1) + 0.25, 3));
@@ -413,6 +450,9 @@ export function LogitLensGrid({
                   {filteredLayers.map((layer) => (
                     <div
                       key={layer}
+                      onMouseEnter={tooltipFor ? (e) => handleTooltipEnter({ kind: "layer", layer }, e) : undefined}
+                      onMouseMove={tooltipFor ? handleTooltipMove : undefined}
+                      onMouseLeave={tooltipFor ? handleTooltipLeave : undefined}
                       style={{
                         width: cellSize,
                         height: headerRowHeight,
@@ -448,6 +488,9 @@ export function LogitLensGrid({
                     return (
                       <div
                         key={actualRowIdx}
+                        onMouseEnter={tooltipFor ? (e) => handleTooltipEnter({ kind: "column", position: actualRowIdx }, e) : undefined}
+                        onMouseMove={tooltipFor ? handleTooltipMove : undefined}
+                        onMouseLeave={tooltipFor ? handleTooltipLeave : undefined}
                         style={{
                           height: cellSize,
                           display: 'flex',
@@ -493,8 +536,22 @@ export function LogitLensGrid({
                             height: cellSize,
                             ...getCellStyle(displayRowIdx, displayColIdx, cellData.probability),
                           }}
-                          onMouseEnter={() => setHoveredCell({ row: displayRowIdx, col: displayColIdx })}
-                          onMouseLeave={() => setHoveredCell(null)}
+                          onMouseEnter={(e) => {
+                            setHoveredCell({ row: displayRowIdx, col: displayColIdx });
+                            handleTooltipEnter(
+                              {
+                                kind: "cell",
+                                layer: filteredLayerIndices[displayColIdx],
+                                position: filteredTokenIndices[displayRowIdx],
+                              },
+                              e,
+                            );
+                          }}
+                          onMouseMove={handleTooltipMove}
+                          onMouseLeave={() => {
+                            setHoveredCell(null);
+                            handleTooltipLeave();
+                          }}
                           onClick={() => handleCellClick(displayRowIdx, displayColIdx)}
                         >
                           <div
@@ -761,6 +818,25 @@ export function LogitLensGrid({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {tooltipFor && tooltipState && (() => {
+        const node = tooltipFor(tooltipState.target);
+        if (!node) return null;
+        return (
+          <div
+            className="logitlens-tooltip pointer-events-none"
+            style={{
+              position: 'absolute',
+              left: tooltipState.x + 12,
+              top: tooltipState.y + 12,
+              zIndex: 60,
+              maxWidth: 320,
+            }}
+          >
+            {node}
+          </div>
+        );
+      })()}
     </div>
   );
 }
