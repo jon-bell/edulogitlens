@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, RotateCcw, ChevronRight } from 'lucide-react';
 
 export interface LogitCell {
   token: string;
@@ -66,11 +67,15 @@ const THEME = {
   probText: '#4b5563',
 } as const;
 
+export type LogitLensVariant = "default" | "compact";
+
 interface LogitLensGridProps {
   data: LogitLensData;
+  variant?: LogitLensVariant;
 }
 
-export function LogitLensGrid({ data }: LogitLensGridProps) {
+export function LogitLensGrid({ data, variant = "default" }: LogitLensGridProps) {
+  const isCompact = variant === "compact";
   const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number } | null>(null);
   const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
   const [showGeneration, setShowGeneration] = useState(false);
@@ -142,9 +147,13 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
     selectedCell.row >= 0 &&
     selectedCell.col >= 0;
 
-  const cellSize = 64 * effectiveZoom;
+  const baseCellSize = isCompact ? 48 : 64;
+  const cellSize = baseCellSize * effectiveZoom;
   const labelColWidth = Math.max(80, 80 * effectiveZoom);
-  const headerRowHeight = 28;
+  const headerRowHeight = isCompact ? 22 : 28;
+  const cellFontSize = isCompact
+    ? Math.max(10, 10 * effectiveZoom)
+    : Math.max(12, 12 * effectiveZoom);
 
   const getBackgroundColor = (prob: number) => {
     const { r, g, b } = THEME.heatmapBase;
@@ -336,7 +345,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                     flexShrink: 0,
                     paddingRight: 12,
                     textAlign: 'right',
-                    fontSize: Math.max(12, 12 * effectiveZoom),
+                    fontSize: cellFontSize,
                     fontWeight: 500,
                   }}
                 >
@@ -393,10 +402,23 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                         >
                           <div
                             className="logitlens-heatmap-cell-token absolute inset-0 flex items-center justify-center font-medium"
-                            style={{ fontSize: Math.max(12, 12 * effectiveZoom), color: getTextColor(cellData.probability) }}
+                            style={{ fontSize: cellFontSize, color: getTextColor(cellData.probability) }}
                           >
                             {cellData.token}
                           </div>
+                          {isCompact && displayColIdx < filteredLayers.length - 1 && (
+                            <ChevronRight
+                              size={Math.max(10, 10 * effectiveZoom)}
+                              className="logitlens-heatmap-cell-chevron pointer-events-none"
+                              style={{
+                                position: 'absolute',
+                                top: 2,
+                                right: 2,
+                                color: getTextColor(cellData.probability),
+                                opacity: 0.55,
+                              }}
+                            />
+                          )}
                           {hasRedBox && (
                             <div
                               className="logitlens-heatmap-overlay logitlens-heatmap-overlay-red absolute inset-0 border-red-500 pointer-events-none"
