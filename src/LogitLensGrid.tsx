@@ -74,11 +74,18 @@ export interface LogitLensHighlight {
   position: number;
 }
 
+export interface LogitLensScrollState {
+  scrollLeft: number;
+  scrollTop: number;
+}
+
 interface LogitLensGridProps {
   data: LogitLensData;
   variant?: LogitLensVariant;
   onCellClick?: (layer: number, position: number) => void;
   highlight?: LogitLensHighlight | null;
+  onScroll?: (state: LogitLensScrollState) => void;
+  scrollState?: LogitLensScrollState;
 }
 
 export function LogitLensGrid({
@@ -86,9 +93,12 @@ export function LogitLensGrid({
   variant = "default",
   onCellClick,
   highlight,
+  onScroll,
+  scrollState,
 }: LogitLensGridProps) {
   const isCompact = variant === "compact";
   const isHighlightControlled = highlight !== undefined;
+  const isScrollControlled = scrollState !== undefined;
   const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number } | null>(null);
   const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
   const [internalHighlight, setInternalHighlight] = useState<LogitLensHighlight | null>(null);
@@ -97,6 +107,9 @@ export function LogitLensGrid({
   const [tokenStep, setTokenStep] = useState(1);
   const [layerStep, setLayerStep] = useState(1);
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Suppress re-firing onScroll when we programmatically set scrollLeft/Top from a controlled scrollState.
+  const ignoreNextScrollRef = useRef(false);
 
   // Start at zoom=1 and let the grid scroll horizontally if it doesn't fit.
   const computeFitZoom = useCallback(() => {
@@ -107,6 +120,16 @@ export function LogitLensGrid({
   useEffect(() => {
     setZoomLevel(computeFitZoom());
   }, [computeFitZoom]);
+
+  useEffect(() => {
+    if (!isScrollControlled || !scrollState) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollLeft === scrollState.scrollLeft && el.scrollTop === scrollState.scrollTop) return;
+    ignoreNextScrollRef.current = true;
+    el.scrollLeft = scrollState.scrollLeft;
+    el.scrollTop = scrollState.scrollTop;
+  }, [isScrollControlled, scrollState?.scrollLeft, scrollState?.scrollTop, scrollState]);
 
   // If zoom hasn't been computed yet, render nothing until we can measure
   const effectiveZoom = zoomLevel ?? 1;
@@ -330,13 +353,23 @@ export function LogitLensGrid({
       <div style={{ flex: '1 1 0px', display: 'flex', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
         {/* Heatmap box — scrolls independently, never affects siblings */}
         <div
+          ref={scrollRef}
           onClick={(e) => {
             const target = e.target as HTMLElement | null;
             if (target && !target.closest('.logitlens-heatmap-cell')) {
               handleOutsideClick();
             }
           }}
-          style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: '16rem', overflow: 'auto', padding: '1.5rem', scrollBehavior: 'smooth', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}
+          onScroll={(e) => {
+            if (ignoreNextScrollRef.current) {
+              ignoreNextScrollRef.current = false;
+              return;
+            }
+            if (!onScroll) return;
+            const el = e.currentTarget;
+            onScroll({ scrollLeft: el.scrollLeft, scrollTop: el.scrollTop });
+          }}
+          style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: '16rem', overflow: 'auto', padding: '1.5rem', scrollBehavior: isScrollControlled ? 'auto' : 'smooth', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}
         >
           {/* Horizontal color scale legend — above the heatmap */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
