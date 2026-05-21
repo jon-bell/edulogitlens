@@ -36,6 +36,9 @@ interface HeatmapGridProps {
   // (controlled); the grid also reports its own scroll via onScroll.
   onScroll?: (state: { scrollLeft: number; scrollTop: number }) => void;
   scrollState?: { scrollLeft: number; scrollTop: number } | null;
+  // When false, cells in this grid cannot be dragged (useful when single-prompt
+  // mode hides the target and there is nothing to drop on).
+  isSourceDraggable?: boolean;
 }
 
 export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
@@ -56,6 +59,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   sidebarContent,
   onScroll,
   scrollState,
+  isSourceDraggable = true,
 }) => {
   const scale = zoom / 100;
   const cellWidth = BASE_CELL_WIDTH * scale;
@@ -381,7 +385,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   probability={cell.probability}
                                   baseColor={baseColor}
                                   promptId={prompt.id}
-                                  isDraggable={!isDropTarget && !isResult}
+                                  isDraggable={!isDropTarget && !isResult && isSourceDraggable}
                                   isSelected={isSelected}
                                   isHighlighted={isHighlight}
                                   isIntervention={isIntervention}
