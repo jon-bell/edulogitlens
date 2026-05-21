@@ -16,24 +16,30 @@ export const TokenPredictionPanel: React.FC<TokenPredictionPanelProps> = ({
     <AnimatePresence>
       {selectedCell && (
         <motion.div
-          initial={{ x: 300, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          exit={{ x: 300, opacity: 0 }}
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.96 }}
           transition={{ type: 'spring', damping: 25 }}
-          className="fixed right-8 top-1/2 -translate-y-1/2 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 p-6 z-50"
+          drag
+          dragMomentum={false}
+          dragElastic={0}
+          className="fixed right-8 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 p-6 z-50"
+          style={{ top: '15vh' }}
         >
           <button
             onClick={onClose}
-            className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-colors"
+            className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-colors z-10"
           >
             <X className="w-5 h-5" />
           </button>
 
           <div className="space-y-4">
-            <div>
+            {/* Header doubles as a visual drag affordance; the whole panel is
+                draggable so it can be moved anywhere over the window. */}
+            <div className="cursor-move active:cursor-grabbing">
               <h3 className="text-lg font-bold text-gray-900">Selected Position</h3>
               <p className="text-sm text-gray-600">
-                Token: <span className="font-mono font-semibold">{selectedCell.tokenPosition}</span> | 
+                Token: <span className="font-mono font-semibold">{selectedCell.tokenPosition}</span> |
                 Layer: <span className="font-mono font-semibold">{selectedCell.layer}</span>
               </p>
             </div>

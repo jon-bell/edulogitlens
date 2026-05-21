@@ -316,6 +316,19 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         const isIntervention = isInterventionCell(tokenPos, layerIdx);
                         const animationDelay = getAnimationDelay(tokenPos, layerIdx);
 
+                        // Context highlight (only for the grid that owns the
+                        // selected cell): everything earlier in token AND layer
+                        // is "context"; the whole token row is the "generated"
+                        // trajectory. Mirrors LogitLensGrid.
+                        const selHere =
+                          selectedCell?.promptId === prompt.id ? selectedCell : null;
+                        const inContext =
+                          !!selHere &&
+                          tokenPos <= selHere.tokenPosition &&
+                          layerValue <= selHere.layer;
+                        const inGenerated =
+                          !!selHere && tokenPos === selHere.tokenPosition;
+
                         const nextLayerIdx =
                           displayColIdx < displayLayers.length - 1
                             ? displayLayerIndices[displayColIdx + 1]
@@ -356,6 +369,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
+                                  inContext={inContext}
+                                  inGenerated={inGenerated}
+                                  highlightColor={prompt.color}
                                 />
                               ) : (
                                 <HeatmapCell
@@ -375,6 +391,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
+                                  inContext={inContext}
+                                  inGenerated={inGenerated}
+                                  highlightColor={prompt.color}
                                 />
                               )}
                             </div>
@@ -593,6 +612,9 @@ interface DropTargetCellProps {
   width: number;
   height: number;
   fontSize: number;
+  inContext?: boolean;
+  inGenerated?: boolean;
+  highlightColor?: string;
 }
 
 const DropTargetCell: React.FC<DropTargetCellProps> = ({
@@ -611,6 +633,9 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
   width,
   height,
   fontSize,
+  inContext,
+  inGenerated,
+  highlightColor,
 }) => {
   const [{ isOver, canDrop }, drop] = useDrop(
     () => ({
@@ -654,6 +679,9 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           width={width}
           height={height}
           fontSize={fontSize}
+          inContext={inContext}
+          inGenerated={inGenerated}
+          highlightColor={highlightColor}
         />
       </motion.div>
     </div>
