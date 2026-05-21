@@ -81,6 +81,13 @@ export function CausalMediationExplorer({
   const [tokenStep, setTokenStep] = useState(1);
   const [layerStep, setLayerStep] = useState(1);
 
+  // Synced scrolling between the two heatmaps (default on). Both grids report
+  // their scroll into this shared state and follow it.
+  const [syncScroll, setSyncScroll] = useState(true);
+  const [scrollState, setScrollState] = useState<{ scrollLeft: number; scrollTop: number } | null>(
+    null,
+  );
+
   // Auto-fit: when on (default), measure the wrapper holding the two grids and
   // derive shared token/layer steps so both grids fit without scrolling. The
   // toolbar's step inputs disable it (manual override).
@@ -319,6 +326,8 @@ export function CausalMediationExplorer({
               layerStep={layerStep}
               onLayerStepChange={handleLayerStepChange}
               summary={toolbarSummary}
+              syncScroll={syncScroll}
+              onSyncScrollChange={setSyncScroll}
             />
           </div>
 
@@ -350,6 +359,8 @@ export function CausalMediationExplorer({
                   handleCellClick(sourcePrompt.id, tokenPos, layer)
                 }
                 onHighlightRefChange={setSourceHighlightRef}
+                onScroll={syncScroll ? setScrollState : undefined}
+                scrollState={syncScroll ? scrollState : undefined}
               />
             </div>
 
@@ -374,6 +385,8 @@ export function CausalMediationExplorer({
                   handleCellClick(targetPrompt.id, tokenPos, layer)
                 }
                 onHighlightRefChange={setTargetHighlightRef}
+                onScroll={syncScroll ? setScrollState : undefined}
+                scrollState={syncScroll ? scrollState : undefined}
               />
             </div>
           </div>

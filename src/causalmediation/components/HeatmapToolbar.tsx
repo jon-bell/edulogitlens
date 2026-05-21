@@ -9,6 +9,8 @@ interface HeatmapToolbarProps {
   layerStep: number;
   onLayerStepChange: (step: number) => void;
   summary?: string;
+  syncScroll?: boolean;
+  onSyncScrollChange?: (value: boolean) => void;
 }
 
 export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
@@ -19,6 +21,8 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
   layerStep,
   onLayerStepChange,
   summary,
+  syncScroll,
+  onSyncScrollChange,
 }) => {
   const handleZoomIn = () => {
     onZoomChange(Math.min(200, zoom + 10));
@@ -90,6 +94,19 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
             className="w-16 text-center text-sm py-1 px-2 border border-gray-300 rounded outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
+
+        {/* Sync scroll toggle */}
+        {onSyncScrollChange && (
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={!!syncScroll}
+              onChange={(e) => onSyncScrollChange(e.target.checked)}
+              className="cursor-pointer"
+            />
+            <span className="text-sm font-medium text-gray-700">Sync scroll</span>
+          </label>
+        )}
       </div>
 
       {/* Right side: Info display */}

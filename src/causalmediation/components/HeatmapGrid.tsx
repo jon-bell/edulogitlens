@@ -32,6 +32,10 @@ interface HeatmapGridProps {
   onHighlightRefChange?: (ref: HTMLElement | null) => void;
   showSidebar?: boolean;
   sidebarContent?: React.ReactNode;
+  // Synced scrolling: when scrollState is provided the grid follows it
+  // (controlled); the grid also reports its own scroll via onScroll.
+  onScroll?: (state: { scrollLeft: number; scrollTop: number }) => void;
+  scrollState?: { scrollLeft: number; scrollTop: number } | null;
 }
 
 export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
@@ -50,6 +54,8 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   onHighlightRefChange,
   showSidebar = false,
   sidebarContent,
+  onScroll,
+  scrollState,
 }) => {
   const scale = zoom / 100;
   const cellWidth = BASE_CELL_WIDTH * scale;
@@ -63,11 +69,32 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
   const [scrolledX, setScrolledX] = React.useState(false);
   const [scrolledY, setScrolledY] = React.useState(false);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  // Suppress re-emitting onScroll when we apply a controlled scrollState.
+  const ignoreNextScrollRef = React.useRef(false);
+  const isScrollControlled = scrollState !== undefined && scrollState !== null;
+
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollLeft } = e.currentTarget;
     setScrolledY(scrollTop > 0);
     setScrolledX(scrollLeft > 0);
+    if (ignoreNextScrollRef.current) {
+      ignoreNextScrollRef.current = false;
+      return;
+    }
+    onScroll?.({ scrollLeft, scrollTop });
   };
+
+  React.useEffect(() => {
+    if (!isScrollControlled || !scrollState) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollLeft === scrollState.scrollLeft && el.scrollTop === scrollState.scrollTop)
+      return;
+    ignoreNextScrollRef.current = true;
+    el.scrollLeft = scrollState.scrollLeft;
+    el.scrollTop = scrollState.scrollTop;
+  }, [isScrollControlled, scrollState?.scrollLeft, scrollState?.scrollTop, scrollState]);
 
   const scrolledBg = 'rgba(255,255,255,0.9)';
   // Solid neutral color for the continuous left-axis bar behind token labels.
@@ -173,8 +200,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
           </div>
 
           <div
+            ref={scrollRef}
             className="overflow-auto px-4 pb-4 w-full"
-            style={{ maxHeight: '60vh', position: 'relative' }}
+            style={{
+              maxHeight: '60vh',
+              position: 'relative',
+              scrollBehavior: isScrollControlled ? 'auto' : undefined,
+            }}
             onScroll={handleScroll}
           >
             <div className="inline-block min-w-full pt-4">
