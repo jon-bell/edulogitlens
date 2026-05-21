@@ -22,10 +22,13 @@ interface HeatmapCellProps {
   // Crosshair highlight when a cell is selected: the column it sits in is
   // "everything this layer produced in one parallel forward pass," and the
   // row it sits in is "this token's prediction trajectory through depth."
-  // Cells outside both the column and the row get dimmed so the crosshair
-  // visually pops.
+  // The causal cone (strictly earlier layers, equal-or-earlier positions)
+  // is the set of cells whose outputs were actually available to compute
+  // the selected cell — rendered as a subtle tint underlay. Cells outside
+  // the crosshair AND the cone get dimmed.
   inColumn?: boolean;
   inRow?: boolean;
+  inCone?: boolean;
   isOutsideCrosshair?: boolean;
   highlightColor?: string;
 }
@@ -70,6 +73,7 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   fontSize = 12,
   inColumn = false,
   inRow = false,
+  inCone = false,
   isOutsideCrosshair = false,
   highlightColor = '#8844ff',
 }) => {
@@ -100,6 +104,8 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   // with the same inset box-shadow so they read as a continuous crosshair
   // crossing at the selected cell.
   const crosshairRing = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.65)`;
+  // Subtler tint for the causal cone (input-dependency rectangle).
+  const coneFill = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;
 
   return (
     <div
@@ -152,13 +158,24 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
           {predictedToken}
         </span>
 
-        {/* Dim cells outside both arms of the crosshair so the selected
-            cell's column AND row visually pop. Mutually exclusive with
-            inColumn / inRow / isSelected on the same cell. */}
+        {/* Dim cells that are neither in the crosshair nor in the causal
+            cone, so the selected cell's column, row, and input-dependency
+            rectangle all visually pop. Mutually exclusive with inColumn /
+            inRow / inCone / isSelected on the same cell. */}
         {isOutsideCrosshair && (
           <div
             className="absolute inset-0 pointer-events-none"
             style={{ backgroundColor: 'rgba(255, 255, 255, 0.65)' }}
+          />
+        )}
+        {/* Causal cone underlay: cells whose outputs actually fed into the
+            selected cell (strictly earlier layers, equal-or-earlier positions
+            under the causal mask). Drawn before the crosshair rings so they
+            sit on top of it cleanly. */}
+        {inCone && !isSelected && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{ backgroundColor: coneFill }}
           />
         )}
         {/* Crosshair arms: column (this layer produced all of these in one

@@ -320,16 +320,26 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         const isIntervention = isInterventionCell(tokenPos, layerIdx);
                         const animationDelay = getAnimationDelay(tokenPos, layerIdx);
 
-                        // Crosshair highlight (only for the grid that owns
-                        // the selected cell): the column it sits in is "this
-                        // layer's parallel output"; the row it sits in is
-                        // "this token's prediction trajectory through depth."
-                        // Cells outside both arms get dimmed so the cross pops.
+                        // Crosshair + causal cone (only for the grid that
+                        // owns the selected cell):
+                        //   * column = this layer's parallel output
+                        //   * row    = this token's depth trajectory
+                        //   * cone   = strictly earlier layers, equal-or-
+                        //              earlier positions: the cells whose
+                        //              outputs were actually available to
+                        //              compute the selected cell under the
+                        //              causal mask.
+                        // Cells outside ALL three get dimmed.
                         const selHere =
                           selectedCell?.promptId === prompt.id ? selectedCell : null;
                         const inColumn = !!selHere && layerValue === selHere.layer;
                         const inRow = !!selHere && tokenPos === selHere.tokenPosition;
-                        const isOutsideCrosshair = !!selHere && !inColumn && !inRow;
+                        const inCone =
+                          !!selHere &&
+                          layerValue < selHere.layer &&
+                          tokenPos <= selHere.tokenPosition;
+                        const isOutsideCrosshair =
+                          !!selHere && !inColumn && !inRow && !inCone;
 
                         const nextLayerIdx =
                           displayColIdx < displayLayers.length - 1
@@ -373,6 +383,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   fontSize={cellFontSize}
                                   inColumn={inColumn}
                                   inRow={inRow}
+                                  inCone={inCone}
                                   isOutsideCrosshair={isOutsideCrosshair}
                                   highlightColor={prompt.color}
                                 />
@@ -396,6 +407,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   fontSize={cellFontSize}
                                   inColumn={inColumn}
                                   inRow={inRow}
+                                  inCone={inCone}
                                   isOutsideCrosshair={isOutsideCrosshair}
                                   highlightColor={prompt.color}
                                 />
@@ -618,6 +630,7 @@ interface DropTargetCellProps {
   fontSize: number;
   inColumn?: boolean;
   inRow?: boolean;
+  inCone?: boolean;
   isOutsideCrosshair?: boolean;
   highlightColor?: string;
 }
@@ -640,6 +653,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
   fontSize,
   inColumn,
   inRow,
+  inCone,
   isOutsideCrosshair,
   highlightColor,
 }) => {
@@ -687,6 +701,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           fontSize={fontSize}
           inColumn={inColumn}
           inRow={inRow}
+          inCone={inCone}
           isOutsideCrosshair={isOutsideCrosshair}
           highlightColor={highlightColor}
         />
