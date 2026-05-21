@@ -19,6 +19,12 @@ interface HeatmapCellProps {
   width?: number;
   height?: number;
   fontSize?: number;
+  // Context-highlight overlays (mirrors LogitLensGrid): when a cell is the
+  // selected position, every earlier-token/earlier-layer cell is "context"
+  // and every cell in the same token row is the "generated" trajectory.
+  inContext?: boolean;
+  inGenerated?: boolean;
+  highlightColor?: string;
 }
 
 function parseHex(hex: string): { r: number; g: number; b: number } {
@@ -59,6 +65,9 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   width = 72,
   height = 48,
   fontSize = 12,
+  inContext = false,
+  inGenerated = false,
+  highlightColor = '#8844ff',
 }) => {
   const [{ isDragging }, drag] = useDrag(
     () => ({
@@ -82,6 +91,9 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
 
   const bg = probabilityToBg(baseColor, probability);
   const textColor = probability < 0.5 ? '#1f2937' : '#ffffff';
+  const hl = parseHex(highlightColor);
+  const contextFill = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.1)`;
+  const generatedRing = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.55)`;
 
   return (
     <div
@@ -133,6 +145,21 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
         >
           {predictedToken}
         </span>
+
+        {/* Context-highlight overlays — not drawn on the selected cell itself
+            (it already carries the yellow selection outline). */}
+        {inContext && !isSelected && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{ backgroundColor: contextFill }}
+          />
+        )}
+        {inGenerated && !isSelected && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{ boxShadow: `inset 0 0 0 2px ${generatedRing}` }}
+          />
+        )}
       </motion.div>
     </div>
   );
