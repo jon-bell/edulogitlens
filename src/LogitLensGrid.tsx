@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, ZoomIn, ZoomOut, RotateCcw, ChevronRight, ChevronDown } from 'lucide-react';
@@ -118,6 +118,8 @@ export function LogitLensGrid({
   const [zoomLevel, setZoomLevel] = useState<number | null>(null);
   const [tokenStep, setTokenStep] = useState(1);
   const [layerStep, setLayerStep] = useState(1);
+  const [autoFit, setAutoFit] = useState(true);
+  const [scrollSize, setScrollSize] = useState<{ width: number; height: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Suppress re-firing onScroll when we programmatically set scrollLeft/Top from a controlled scrollState.
@@ -142,6 +144,18 @@ export function LogitLensGrid({
     el.scrollLeft = scrollState.scrollLeft;
     el.scrollTop = scrollState.scrollTop;
   }, [isScrollControlled, scrollState?.scrollLeft, scrollState?.scrollTop, scrollState]);
+
+  // Measure the scroll container so auto-fit can pick token/layer steps that
+  // make the whole grid fit without scrolling.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const update = () => setScrollSize({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // If zoom hasn't been computed yet, render nothing until we can measure
   const effectiveZoom = zoomLevel ?? 1;
@@ -203,27 +217,63 @@ export function LogitLensGrid({
     setZoomLevel(computeFitZoom());
     setTokenStep(1);
     setLayerStep(1);
+    setAutoFit(true); // re-enable auto-fit
   };
 
   const handleTokenStepChange = (value: number) => {
+    setAutoFit(false); // manual override
     setTokenStep(value);
     setSelectedCell(null); // Clear selection when step changes
   };
 
   const handleLayerStepChange = (value: number) => {
+    setAutoFit(false); // manual override
     setLayerStep(value);
     setSelectedCell(null); // Clear selection when step changes
   };
 
+  // Auto-fit: derive token/layer steps from the measured scroll container so
+  // the entire grid fits without scrolling. Cell footprint is the unzoomed
+  // baseCellSize; we reserve the label column, header rows, the legend, and
+  // the container padding before counting how many cells fit.
+  const autoStep = useMemo(() => {
+    const numTokens = data.tokens.length;
+    const numLayers = data.layers.length;
+    if (!scrollSize || numTokens === 0 || numLayers === 0) {
+      return { tokenStep: 1, layerStep: 1 };
+    }
+    const footprint = isCompact ? 48 : 64;
+    const reservedLabelCol = 80; // labelColWidth
+    const reservedHeader = (isCompact ? 22 : 28) + 40; // headerRowHeight + legend
+    const padding = 48; // ~24px padding each side
+
+    const layersThatFit = Math.max(
+      1,
+      Math.floor((scrollSize.width - reservedLabelCol - padding) / footprint),
+    );
+    const tokensThatFit = Math.max(
+      1,
+      Math.floor((scrollSize.height - reservedHeader - padding) / footprint),
+    );
+
+    return {
+      layerStep: Math.max(1, Math.ceil(numLayers / layersThatFit)),
+      tokenStep: Math.max(1, Math.ceil(numTokens / tokensThatFit)),
+    };
+  }, [scrollSize, data.tokens.length, data.layers.length, isCompact]);
+
+  const effectiveTokenStep = autoFit ? autoStep.tokenStep : tokenStep;
+  const effectiveLayerStep = autoFit ? autoStep.layerStep : layerStep;
+
   // Filter data based on step sizes, always including the last element
   const filteredTokenIndices = data.tokens
     .map((_, idx) => idx)
-    .filter((idx) => idx % tokenStep === 0 || idx === data.tokens.length - 1);
+    .filter((idx) => idx % effectiveTokenStep === 0 || idx === data.tokens.length - 1);
   const filteredTokens = filteredTokenIndices.map(idx => data.tokens[idx]);
-  
+
   const filteredLayerIndices = data.layers
     .map((_, idx) => idx)
-    .filter((idx) => idx % layerStep === 0 || idx === data.layers.length - 1);
+    .filter((idx) => idx % effectiveLayerStep === 0 || idx === data.layers.length - 1);
   const filteredLayers = filteredLayerIndices.map(idx => data.layers[idx]);
   
   const filteredData = filteredTokenIndices.map(tokenIdx =>
@@ -358,7 +408,7 @@ export function LogitLensGrid({
               type="number"
               min="1"
               max="10"
-              value={tokenStep}
+              value={effectiveTokenStep}
               onChange={(e) => handleTokenStepChange(Math.max(1, parseInt(e.target.value) || 1))}
               style={{ width: '4rem', padding: '0.25rem 0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem' }}
             />
@@ -374,11 +424,15 @@ export function LogitLensGrid({
               type="number"
               min="1"
               max="10"
-              value={layerStep}
+              value={effectiveLayerStep}
               onChange={(e) => handleLayerStepChange(Math.max(1, parseInt(e.target.value) || 1))}
               style={{ width: '4rem', padding: '0.25rem 0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem' }}
             />
           </div>
+
+          {autoFit && (
+            <span style={{ fontSize: '0.75rem', fontWeight: 500, color: '#6b7280', flexShrink: 0 }}>(auto)</span>
+          )}
         </div>
 
         <div style={{ fontSize: '0.875rem', color: '#4b5563', flexShrink: 0, whiteSpace: 'nowrap' }}>
