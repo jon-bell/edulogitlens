@@ -323,7 +323,8 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         // Context highlight (only for the grid that owns the
                         // selected cell): everything earlier in token AND layer
                         // is "context"; the whole token row is the "generated"
-                        // trajectory. Mirrors LogitLensGrid.
+                        // trajectory. Cells outside the upper-left rectangle
+                        // are dimmed so the context region pops.
                         const selHere =
                           selectedCell?.promptId === prompt.id ? selectedCell : null;
                         const inContext =
@@ -332,6 +333,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                           layerValue <= selHere.layer;
                         const inGenerated =
                           !!selHere && tokenPos === selHere.tokenPosition;
+                        const isOutsideContext = !!selHere && !inContext;
 
                         const nextLayerIdx =
                           displayColIdx < displayLayers.length - 1
@@ -375,6 +377,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   fontSize={cellFontSize}
                                   inContext={inContext}
                                   inGenerated={inGenerated}
+                                  isOutsideContext={isOutsideContext}
                                   highlightColor={prompt.color}
                                 />
                               ) : (
@@ -397,6 +400,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   fontSize={cellFontSize}
                                   inContext={inContext}
                                   inGenerated={inGenerated}
+                                  isOutsideContext={isOutsideContext}
                                   highlightColor={prompt.color}
                                 />
                               )}
@@ -618,6 +622,7 @@ interface DropTargetCellProps {
   fontSize: number;
   inContext?: boolean;
   inGenerated?: boolean;
+  isOutsideContext?: boolean;
   highlightColor?: string;
 }
 
@@ -639,6 +644,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
   fontSize,
   inContext,
   inGenerated,
+  isOutsideContext,
   highlightColor,
 }) => {
   const [{ isOver, canDrop }, drop] = useDrop(
@@ -685,6 +691,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           fontSize={fontSize}
           inContext={inContext}
           inGenerated={inGenerated}
+          isOutsideContext={isOutsideContext}
           highlightColor={highlightColor}
         />
       </motion.div>
