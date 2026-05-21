@@ -28,7 +28,7 @@ export const VerticalFlowArrow: React.FC<VerticalFlowArrowProps> = ({
       }}
     >
       <ChevronDown
-        size={22}
+        size={14}
         strokeWidth={2.25}
         color={arrowColor}
         style={{ opacity }}
