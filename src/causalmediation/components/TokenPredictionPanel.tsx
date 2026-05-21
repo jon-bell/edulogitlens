@@ -30,7 +30,7 @@ export const TokenPredictionPanel: React.FC<TokenPredictionPanelProps> = ({
 }) => {
   const [legendOpen, setLegendOpen] = useState(true);
   const hl = parseHex(highlightColor);
-  const ringRgba = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.65)`;
+  const crosshairRgba = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;
   const coneRgba = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;
   return (
     <AnimatePresence>
@@ -119,7 +119,7 @@ export const TokenPredictionPanel: React.FC<TokenPredictionPanelProps> = ({
                   <div className="flex items-start gap-2">
                     <div
                       className="mt-0.5 shrink-0 w-4 h-3 rounded-sm"
-                      style={{ boxShadow: `inset 0 0 0 2px ${ringRgba}` }}
+                      style={{ backgroundColor: crosshairRgba }}
                       aria-hidden
                     />
                     <p>
@@ -131,7 +131,7 @@ export const TokenPredictionPanel: React.FC<TokenPredictionPanelProps> = ({
                   <div className="flex items-start gap-2">
                     <div
                       className="mt-0.5 shrink-0 w-4 h-3 rounded-sm"
-                      style={{ boxShadow: `inset 0 0 0 2px ${ringRgba}` }}
+                      style={{ backgroundColor: crosshairRgba }}
                       aria-hidden
                     />
                     <p>

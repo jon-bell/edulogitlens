@@ -100,12 +100,11 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   const bg = probabilityToBg(baseColor, probability);
   const textColor = probability < 0.5 ? '#1f2937' : '#ffffff';
   const hl = parseHex(highlightColor);
-  // Single ring color used for both arms of the crosshair. Both rings drawn
-  // with the same inset box-shadow so they read as a continuous crosshair
-  // crossing at the selected cell.
-  const crosshairRing = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.65)`;
-  // Subtler tint for the causal cone (input-dependency rectangle).
+  // Background-tint overlays for the three highlight regions. Cells that fall
+  // in more than one region stack the overlays naturally — e.g. a cell in
+  // BOTH the cone and the column reads darker than a cone-only cell.
   const coneFill = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;
+  const crosshairFill = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;
 
   return (
     <div
@@ -178,20 +177,20 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
             style={{ backgroundColor: coneFill }}
           />
         )}
-        {/* Crosshair arms: column (this layer produced all of these in one
-            parallel forward pass) and row (this token's prediction trajectory
-            through depth). Same inset ring style for both. Not drawn on the
+        {/* Crosshair arms as background tints (stacked, so cells in both arms
+            read strongest). Column = this layer's parallel output across
+            positions; row = this token's depth trajectory. Not drawn on the
             selected cell itself — it already carries the yellow outline. */}
         {inColumn && !isSelected && (
           <div
             className="absolute inset-0 pointer-events-none"
-            style={{ boxShadow: `inset 0 0 0 2px ${crosshairRing}` }}
+            style={{ backgroundColor: crosshairFill }}
           />
         )}
         {inRow && !isSelected && (
           <div
             className="absolute inset-0 pointer-events-none"
-            style={{ boxShadow: `inset 0 0 0 2px ${crosshairRing}` }}
+            style={{ backgroundColor: crosshairFill }}
           />
         )}
       </motion.div>
