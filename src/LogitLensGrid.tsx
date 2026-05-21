@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, ZoomIn, ZoomOut, RotateCcw, ChevronRight } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, RotateCcw, ChevronRight, ChevronDown } from 'lucide-react';
 
 export interface LogitCell {
   token: string;
@@ -560,16 +560,42 @@ export function LogitLensGrid({
                           >
                             {cellData.token}
                           </div>
+                          {/*
+                            Compact-variant chevrons embedded in the cell border so
+                            each cell visibly feeds the next one. Right chevron points
+                            to the next layer; down chevron to the next token position.
+                            Both are suppressed at the right/bottom edge to avoid
+                            chevrons pointing at nothing.
+                          */}
                           {isCompact && displayColIdx < filteredLayers.length - 1 && (
                             <ChevronRight
-                              size={Math.max(10, 10 * effectiveZoom)}
+                              size={Math.max(16, 16 * effectiveZoom)}
+                              strokeWidth={2.25}
                               className="logitlens-heatmap-cell-chevron pointer-events-none"
                               style={{
                                 position: 'absolute',
-                                top: 2,
-                                right: 2,
+                                top: '50%',
+                                right: 0,
+                                transform: 'translate(50%, -50%)',
                                 color: getTextColor(cellData.probability),
-                                opacity: 0.55,
+                                opacity: 0.85,
+                                zIndex: 1,
+                              }}
+                            />
+                          )}
+                          {isCompact && displayRowIdx < filteredTokens.length - 1 && (
+                            <ChevronDown
+                              size={Math.max(16, 16 * effectiveZoom)}
+                              strokeWidth={2.25}
+                              className="logitlens-heatmap-cell-chevron pointer-events-none"
+                              style={{
+                                position: 'absolute',
+                                bottom: 0,
+                                left: '50%',
+                                transform: 'translate(-50%, 50%)',
+                                color: getTextColor(cellData.probability),
+                                opacity: 0.85,
+                                zIndex: 1,
                               }}
                             />
                           )}
