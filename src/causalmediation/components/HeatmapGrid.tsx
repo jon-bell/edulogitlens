@@ -10,8 +10,8 @@ const BASE_CELL_WIDTH = 72;
 const BASE_CELL_HEIGHT = 48;
 // Tighter than the original arrow gutters (28 / 16): keep a little negative
 // space between cells for the chevron, but pack the grid noticeably denser.
-const BASE_HORIZ_ARROW_WIDTH = 16;
-const BASE_VERT_ARROW_HEIGHT = 9;
+const BASE_HORIZ_ARROW_WIDTH = 12;
+const BASE_VERT_ARROW_HEIGHT = 6;
 const BASE_TOKEN_COL_WIDTH = 80;
 const BASE_LABEL_FONT = 14;
 const BASE_CELL_FONT = 12;
