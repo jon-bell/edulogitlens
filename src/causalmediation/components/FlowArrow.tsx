@@ -20,7 +20,7 @@ export const FlowArrow: React.FC<FlowArrowProps> = ({
   return (
     <motion.div
       className="flex items-center justify-center"
-      style={{ width: '36px', height: '32px' }}
+      style={{ width: '16px', height: '24px' }}
       initial={isBlended ? { scale: 0, opacity: 0, x: -10 } : false}
       animate={isBlended ? { scale: 1, opacity: 1, x: 0 } : {}}
       transition={{
@@ -29,7 +29,7 @@ export const FlowArrow: React.FC<FlowArrowProps> = ({
       }}
     >
       <ChevronRight
-        size={22}
+        size={16}
         strokeWidth={2.25}
         color={arrowColor}
         style={{ opacity }}
