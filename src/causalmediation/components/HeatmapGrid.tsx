@@ -320,20 +320,16 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         const isIntervention = isInterventionCell(tokenPos, layerIdx);
                         const animationDelay = getAnimationDelay(tokenPos, layerIdx);
 
-                        // Context highlight (only for the grid that owns the
-                        // selected cell): everything earlier in token AND layer
-                        // is "context"; the whole token row is the "generated"
-                        // trajectory. Cells outside the upper-left rectangle
-                        // are dimmed so the context region pops.
+                        // Crosshair highlight (only for the grid that owns
+                        // the selected cell): the column it sits in is "this
+                        // layer's parallel output"; the row it sits in is
+                        // "this token's prediction trajectory through depth."
+                        // Cells outside both arms get dimmed so the cross pops.
                         const selHere =
                           selectedCell?.promptId === prompt.id ? selectedCell : null;
-                        const inContext =
-                          !!selHere &&
-                          tokenPos <= selHere.tokenPosition &&
-                          layerValue <= selHere.layer;
-                        const inGenerated =
-                          !!selHere && tokenPos === selHere.tokenPosition;
-                        const isOutsideContext = !!selHere && !inContext;
+                        const inColumn = !!selHere && layerValue === selHere.layer;
+                        const inRow = !!selHere && tokenPos === selHere.tokenPosition;
+                        const isOutsideCrosshair = !!selHere && !inColumn && !inRow;
 
                         const nextLayerIdx =
                           displayColIdx < displayLayers.length - 1
@@ -375,9 +371,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
-                                  inContext={inContext}
-                                  inGenerated={inGenerated}
-                                  isOutsideContext={isOutsideContext}
+                                  inColumn={inColumn}
+                                  inRow={inRow}
+                                  isOutsideCrosshair={isOutsideCrosshair}
                                   highlightColor={prompt.color}
                                 />
                               ) : (
@@ -398,9 +394,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
-                                  inContext={inContext}
-                                  inGenerated={inGenerated}
-                                  isOutsideContext={isOutsideContext}
+                                  inColumn={inColumn}
+                                  inRow={inRow}
+                                  isOutsideCrosshair={isOutsideCrosshair}
                                   highlightColor={prompt.color}
                                 />
                               )}
@@ -620,9 +616,9 @@ interface DropTargetCellProps {
   width: number;
   height: number;
   fontSize: number;
-  inContext?: boolean;
-  inGenerated?: boolean;
-  isOutsideContext?: boolean;
+  inColumn?: boolean;
+  inRow?: boolean;
+  isOutsideCrosshair?: boolean;
   highlightColor?: string;
 }
 
@@ -642,9 +638,9 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
   width,
   height,
   fontSize,
-  inContext,
-  inGenerated,
-  isOutsideContext,
+  inColumn,
+  inRow,
+  isOutsideCrosshair,
   highlightColor,
 }) => {
   const [{ isOver, canDrop }, drop] = useDrop(
@@ -689,9 +685,9 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           width={width}
           height={height}
           fontSize={fontSize}
-          inContext={inContext}
-          inGenerated={inGenerated}
-          isOutsideContext={isOutsideContext}
+          inColumn={inColumn}
+          inRow={inRow}
+          isOutsideCrosshair={isOutsideCrosshair}
           highlightColor={highlightColor}
         />
       </motion.div>

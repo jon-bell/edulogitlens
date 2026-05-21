@@ -19,14 +19,14 @@ interface HeatmapCellProps {
   width?: number;
   height?: number;
   fontSize?: number;
-  // Context-highlight overlays (mirrors LogitLensGrid): when a cell is the
-  // selected position, every earlier-token/earlier-layer cell is "context"
-  // and every cell in the same token row is the "generated" trajectory.
-  // Cells OUTSIDE the upper-left rectangle get a dim overlay so the context
-  // region visually pops.
-  inContext?: boolean;
-  inGenerated?: boolean;
-  isOutsideContext?: boolean;
+  // Crosshair highlight when a cell is selected: the column it sits in is
+  // "everything this layer produced in one parallel forward pass," and the
+  // row it sits in is "this token's prediction trajectory through depth."
+  // Cells outside both the column and the row get dimmed so the crosshair
+  // visually pops.
+  inColumn?: boolean;
+  inRow?: boolean;
+  isOutsideCrosshair?: boolean;
   highlightColor?: string;
 }
 
@@ -68,9 +68,9 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   width = 72,
   height = 48,
   fontSize = 12,
-  inContext = false,
-  inGenerated = false,
-  isOutsideContext = false,
+  inColumn = false,
+  inRow = false,
+  isOutsideCrosshair = false,
   highlightColor = '#8844ff',
 }) => {
   const [{ isDragging }, drag] = useDrag(
@@ -96,8 +96,10 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   const bg = probabilityToBg(baseColor, probability);
   const textColor = probability < 0.5 ? '#1f2937' : '#ffffff';
   const hl = parseHex(highlightColor);
-  const contextFill = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.15)`;
-  const generatedRing = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.55)`;
+  // Single ring color used for both arms of the crosshair. Both rings drawn
+  // with the same inset box-shadow so they read as a continuous crosshair
+  // crossing at the selected cell.
+  const crosshairRing = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.65)`;
 
   return (
     <div
@@ -150,28 +152,29 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
           {predictedToken}
         </span>
 
-        {/* Dim cells outside the upper-left context rectangle so the selected
-            cell's "context" region pops. Drawn only when something is selected
-            in this grid (isOutsideContext is mutually exclusive with inContext/
-            isSelected/inGenerated on the same cell). */}
-        {isOutsideContext && (
+        {/* Dim cells outside both arms of the crosshair so the selected
+            cell's column AND row visually pop. Mutually exclusive with
+            inColumn / inRow / isSelected on the same cell. */}
+        {isOutsideCrosshair && (
           <div
             className="absolute inset-0 pointer-events-none"
             style={{ backgroundColor: 'rgba(255, 255, 255, 0.65)' }}
           />
         )}
-        {/* Subtle positive tint over the in-context region (skipped on the
-            selected cell itself, which already shows a yellow outline). */}
-        {inContext && !isSelected && (
+        {/* Crosshair arms: column (this layer produced all of these in one
+            parallel forward pass) and row (this token's prediction trajectory
+            through depth). Same inset ring style for both. Not drawn on the
+            selected cell itself — it already carries the yellow outline. */}
+        {inColumn && !isSelected && (
           <div
             className="absolute inset-0 pointer-events-none"
-            style={{ backgroundColor: contextFill }}
+            style={{ boxShadow: `inset 0 0 0 2px ${crosshairRing}` }}
           />
         )}
-        {inGenerated && !isSelected && (
+        {inRow && !isSelected && (
           <div
             className="absolute inset-0 pointer-events-none"
-            style={{ boxShadow: `inset 0 0 0 2px ${generatedRing}` }}
+            style={{ boxShadow: `inset 0 0 0 2px ${crosshairRing}` }}
           />
         )}
       </motion.div>
