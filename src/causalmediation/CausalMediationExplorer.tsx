@@ -50,6 +50,11 @@ export function CausalMediationExplorer({
     [sourceData, sourcePromptText],
   );
 
+  // Single-prompt mode: when the target text is blank, hide the target grid
+  // and the entire intervention flow (drag/drop, curved arrow, result panel).
+  // CM Intro degrades gracefully into a lens viewer for just the source.
+  const isSinglePromptMode = !targetPromptText || targetPromptText.trim().length === 0;
+
   const targetPrompt = useMemo<PromptInput>(
     () => ({
       id: 'target',
@@ -331,12 +336,14 @@ export function CausalMediationExplorer({
             />
           </div>
 
-          {/* Side-by-side prompts */}
+          {/* Side-by-side prompts (single column when in single-prompt mode). */}
           <div
             ref={gridsRef}
             style={{
               display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+              gridTemplateColumns: isSinglePromptMode
+                ? 'minmax(0, 1fr)'
+                : 'minmax(0, 1fr) minmax(0, 1fr)',
               gap: '1.5rem',
             }}
           >
@@ -359,11 +366,13 @@ export function CausalMediationExplorer({
                   handleCellClick(sourcePrompt.id, tokenPos, layer)
                 }
                 onHighlightRefChange={setSourceHighlightRef}
-                onScroll={syncScroll ? setScrollState : undefined}
-                scrollState={syncScroll ? scrollState : undefined}
+                onScroll={syncScroll && !isSinglePromptMode ? setScrollState : undefined}
+                scrollState={syncScroll && !isSinglePromptMode ? scrollState : undefined}
+                isSourceDraggable={!isSinglePromptMode}
               />
             </div>
 
+            {!isSinglePromptMode && (
             <div className="min-w-0 w-full">
               <HeatmapGrid
                 prompt={targetPrompt}
@@ -389,6 +398,7 @@ export function CausalMediationExplorer({
                 scrollState={syncScroll ? scrollState : undefined}
               />
             </div>
+            )}
           </div>
 
           {intervention && sourceHighlightRef && targetHighlightRef && (
@@ -544,7 +554,7 @@ export function CausalMediationExplorer({
             </motion.div>
           )}
 
-          {!resultPromptInput && !(isInterventionPending && intervention) && (
+          {!isSinglePromptMode && !resultPromptInput && !(isInterventionPending && intervention) && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -554,6 +564,18 @@ export function CausalMediationExplorer({
                 Drag a cell from the{' '}
                 <strong style={{ color: sourcePrompt.color }}>Source Prompt</strong> onto a cell in the{' '}
                 <strong style={{ color: targetPrompt.color }}>Target Prompt</strong>, or click any cell to view its top token predictions.
+              </p>
+            </motion.div>
+          )}
+          {isSinglePromptMode && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center text-gray-500 py-3 border-2 border-dashed border-gray-300 rounded-xl bg-white/50"
+            >
+              <p className="text-sm">
+                Click any cell to view its top token predictions. Add a target
+                prompt above to enable drag-and-drop patching.
               </p>
             </motion.div>
           )}
