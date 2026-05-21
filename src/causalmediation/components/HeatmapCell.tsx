@@ -22,8 +22,11 @@ interface HeatmapCellProps {
   // Context-highlight overlays (mirrors LogitLensGrid): when a cell is the
   // selected position, every earlier-token/earlier-layer cell is "context"
   // and every cell in the same token row is the "generated" trajectory.
+  // Cells OUTSIDE the upper-left rectangle get a dim overlay so the context
+  // region visually pops.
   inContext?: boolean;
   inGenerated?: boolean;
+  isOutsideContext?: boolean;
   highlightColor?: string;
 }
 
@@ -67,6 +70,7 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   fontSize = 12,
   inContext = false,
   inGenerated = false,
+  isOutsideContext = false,
   highlightColor = '#8844ff',
 }) => {
   const [{ isDragging }, drag] = useDrag(
@@ -92,7 +96,7 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   const bg = probabilityToBg(baseColor, probability);
   const textColor = probability < 0.5 ? '#1f2937' : '#ffffff';
   const hl = parseHex(highlightColor);
-  const contextFill = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.1)`;
+  const contextFill = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.15)`;
   const generatedRing = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.55)`;
 
   return (
@@ -146,8 +150,18 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
           {predictedToken}
         </span>
 
-        {/* Context-highlight overlays — not drawn on the selected cell itself
-            (it already carries the yellow selection outline). */}
+        {/* Dim cells outside the upper-left context rectangle so the selected
+            cell's "context" region pops. Drawn only when something is selected
+            in this grid (isOutsideContext is mutually exclusive with inContext/
+            isSelected/inGenerated on the same cell). */}
+        {isOutsideContext && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{ backgroundColor: 'rgba(255, 255, 255, 0.65)' }}
+          />
+        )}
+        {/* Subtle positive tint over the in-context region (skipped on the
+            selected cell itself, which already shows a yellow outline). */}
         {inContext && !isSelected && (
           <div
             className="absolute inset-0 pointer-events-none"
