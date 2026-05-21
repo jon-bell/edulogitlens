@@ -584,6 +584,13 @@ export function CausalMediationExplorer({
         <TokenPredictionPanel
           selectedCell={selectedCell}
           onClose={() => setSelectedCell(null)}
+          highlightColor={
+            selectedCell?.promptId === targetPrompt.id
+              ? targetPrompt.color
+              : selectedCell?.promptId === 'result'
+                ? targetPrompt.color
+                : sourcePrompt.color
+          }
         />
       </div>
     </DndProvider>

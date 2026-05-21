@@ -1,17 +1,37 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X } from 'lucide-react';
+import { X, ChevronDown, ChevronRight } from 'lucide-react';
 import { SelectedCell } from '../types';
 
 interface TokenPredictionPanelProps {
   selectedCell: SelectedCell | null;
   onClose: () => void;
+  // Color of the prompt that owns the selected cell — used to colour the
+  // small legend swatches so they match what is drawn on the heatmap.
+  highlightColor?: string;
+}
+
+function parseHex(hex: string): { r: number; g: number; b: number } {
+  const clean = hex.replace('#', '');
+  const full = clean.length === 3
+    ? clean.split('').map((c) => c + c).join('')
+    : clean;
+  return {
+    r: parseInt(full.slice(0, 2), 16),
+    g: parseInt(full.slice(2, 4), 16),
+    b: parseInt(full.slice(4, 6), 16),
+  };
 }
 
 export const TokenPredictionPanel: React.FC<TokenPredictionPanelProps> = ({
   selectedCell,
   onClose,
+  highlightColor = '#8844ff',
 }) => {
+  const [legendOpen, setLegendOpen] = useState(true);
+  const hl = parseHex(highlightColor);
+  const ringRgba = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.65)`;
+  const coneRgba = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;
   return (
     <AnimatePresence>
       {selectedCell && (
@@ -79,6 +99,61 @@ export const TokenPredictionPanel: React.FC<TokenPredictionPanelProps> = ({
                   </motion.div>
                 ))}
               </div>
+            </div>
+
+            {/* Collapsible legend explaining the on-grid highlights. */}
+            <div className="border-t border-gray-200 pt-3">
+              <button
+                onClick={() => setLegendOpen((v) => !v)}
+                className="flex items-center gap-1 text-xs font-semibold text-gray-600 hover:text-gray-800"
+              >
+                {legendOpen ? (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5" />
+                )}
+                <span>About this view</span>
+              </button>
+              {legendOpen && (
+                <div className="mt-2 space-y-2 text-xs text-gray-600">
+                  <div className="flex items-start gap-2">
+                    <div
+                      className="mt-0.5 shrink-0 w-4 h-3 rounded-sm"
+                      style={{ boxShadow: `inset 0 0 0 2px ${ringRgba}` }}
+                      aria-hidden
+                    />
+                    <p>
+                      <span className="font-semibold text-gray-800">Column</span>: everything this
+                      layer predicted at once — a layer produces values at every token position in
+                      a single parallel forward pass.
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <div
+                      className="mt-0.5 shrink-0 w-4 h-3 rounded-sm"
+                      style={{ boxShadow: `inset 0 0 0 2px ${ringRgba}` }}
+                      aria-hidden
+                    />
+                    <p>
+                      <span className="font-semibold text-gray-800">Row</span>: this token&apos;s
+                      prediction trajectory through depth — how the model&apos;s top guess at this
+                      position evolves layer by layer.
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <div
+                      className="mt-0.5 shrink-0 w-4 h-3 rounded-sm border border-gray-200"
+                      style={{ backgroundColor: coneRgba }}
+                      aria-hidden
+                    />
+                    <p>
+                      <span className="font-semibold text-gray-800">Cone</span>: cells whose outputs
+                      were actually available to compute this cell — strictly earlier layers, at the
+                      same or earlier positions (causal mask).
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </motion.div>
