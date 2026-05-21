@@ -3,13 +3,9 @@ import { useDrop } from 'react-dnd';
 import { motion } from 'motion/react';
 import { PromptInput, SelectedCell } from '../types';
 import { HeatmapCell } from './HeatmapCell';
-import { FlowArrow } from './FlowArrow';
-import { VerticalFlowArrow } from './VerticalFlowArrow';
 
 const BASE_CELL_WIDTH = 72;
 const BASE_CELL_HEIGHT = 48;
-const BASE_HORIZ_ARROW_WIDTH = 28;
-const BASE_VERT_ARROW_HEIGHT = 16;
 const BASE_TOKEN_COL_WIDTH = 80;
 const BASE_LABEL_FONT = 14;
 const BASE_CELL_FONT = 12;
@@ -52,8 +48,6 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   const scale = zoom / 100;
   const cellWidth = BASE_CELL_WIDTH * scale;
   const cellHeight = BASE_CELL_HEIGHT * scale;
-  const horizArrowWidth = BASE_HORIZ_ARROW_WIDTH * scale;
-  const vertArrowHeight = BASE_VERT_ARROW_HEIGHT * scale;
   const tokenColWidth = BASE_TOKEN_COL_WIDTH * scale;
   const labelFontSize = Math.max(10, BASE_LABEL_FONT * scale);
   const cellFontSize = Math.max(9, BASE_CELL_FONT * scale);
@@ -214,7 +208,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                     ...stickyCornerShadow,
                   }}
                 />
-                {displayLayers.map((layerValue, idx) => (
+                {displayLayers.map((layerValue) => (
                   <div
                     key={`top-${layerValue}`}
                     className="flex items-center"
@@ -233,22 +227,15 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                     >
                       {layerValue}
                     </div>
-                    {idx < displayLayers.length - 1 && (
-                      <div style={{ width: horizArrowWidth, height: Math.max(24, cellHeight * 0.6) }} />
-                    )}
                   </div>
                 ))}
               </div>
 
               {displayTokens.map((tokenText, displayRowIdx) => {
                 const tokenPos = displayTokenIndices[displayRowIdx];
-                const isLastDisplayRow = displayRowIdx === displayTokens.length - 1;
-                const nextTokenPos = !isLastDisplayRow
-                  ? displayTokenIndices[displayRowIdx + 1]
-                  : null;
                 return (
                   <div key={tokenPos}>
-                    <div className="flex items-center mb-2">
+                    <div className="flex items-center">
                       <div
                         className="shrink-0 pr-3 text-right font-medium text-gray-700 truncate"
                         style={{
@@ -289,164 +276,76 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         const nextIsIntervention =
                           nextLayerIdx != null && isInterventionCell(tokenPos, nextLayerIdx);
 
+                        // Right chevron: drawn on the cell's right border to feed
+                        // the next layer. Suppressed at the last column and where
+                        // the next cell is the intervention cell (matching the old
+                        // horizontal-arrow suppression).
+                        const showRightChevron =
+                          displayColIdx < displayLayers.length - 1 && !nextIsIntervention;
+                        // Down chevron: drawn on the cell's bottom border to feed
+                        // the next token row. Suppressed on the last row.
+                        const showDownChevron = displayRowIdx < displayTokens.length - 1;
+
                         return (
                           <div
                             key={`${tokenPos}-${layerValue}`}
-                            className="flex items-center"
-                            style={{ flexShrink: 0 }}
+                            style={{
+                              width: cellWidth,
+                              height: cellHeight,
+                              flexShrink: 0,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
                           >
-                            <div
-                              style={{
-                                width: cellWidth,
-                                height: cellHeight,
-                                flexShrink: 0,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}
-                            >
-                              {isDropTarget ? (
-                                <DropTargetCell
-                                  tokenPosition={tokenPos}
-                                  layer={layerValue}
-                                  predictedToken={cell.token}
-                                  probability={cell.probability}
-                                  baseColor={prompt.color}
-                                  promptId={prompt.id}
-                                  onDrop={onDrop}
-                                  isHighlighted={isHighlight}
-                                  isSelected={isSelected}
-                                  onCellClick={onCellClick}
-                                  animationDelay={0}
-                                  onHighlightRefChange={onHighlightRefChange}
-                                  width={cellWidth}
-                                  height={cellHeight}
-                                  fontSize={cellFontSize}
-                                />
-                              ) : (
-                                <HeatmapCell
-                                  tokenPosition={tokenPos}
-                                  layer={layerValue}
-                                  predictedToken={cell.token}
-                                  probability={cell.probability}
-                                  baseColor={baseColor}
-                                  promptId={prompt.id}
-                                  isDraggable={!isDropTarget && !isResult}
-                                  isSelected={isSelected}
-                                  isHighlighted={isHighlight}
-                                  isIntervention={isIntervention}
-                                  onClick={() => onCellClick?.(tokenPos, layerValue)}
-                                  animationDelay={animationDelay}
-                                  highlightRef={isHighlight ? onHighlightRefChange : undefined}
-                                  width={cellWidth}
-                                  height={cellHeight}
-                                  fontSize={cellFontSize}
-                                />
-                              )}
-                            </div>
-
-                            {displayColIdx < displayLayers.length - 1 && !nextIsIntervention && (
-                              <div
-                                style={{
-                                  width: horizArrowWidth,
-                                  flexShrink: 0,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                }}
-                              >
-                                <FlowArrow color={baseColor} opacity={0.9} />
-                              </div>
-                            )}
-                            {displayColIdx < displayLayers.length - 1 && nextIsIntervention && (
-                              <div style={{ width: horizArrowWidth, flexShrink: 0 }} />
+                            {isDropTarget ? (
+                              <DropTargetCell
+                                tokenPosition={tokenPos}
+                                layer={layerValue}
+                                predictedToken={cell.token}
+                                probability={cell.probability}
+                                baseColor={prompt.color}
+                                promptId={prompt.id}
+                                onDrop={onDrop}
+                                isHighlighted={isHighlight}
+                                isSelected={isSelected}
+                                onCellClick={onCellClick}
+                                animationDelay={0}
+                                onHighlightRefChange={onHighlightRefChange}
+                                width={cellWidth}
+                                height={cellHeight}
+                                fontSize={cellFontSize}
+                                showRightChevron={showRightChevron}
+                                showDownChevron={showDownChevron}
+                                chevronColor={baseColor}
+                              />
+                            ) : (
+                              <HeatmapCell
+                                tokenPosition={tokenPos}
+                                layer={layerValue}
+                                predictedToken={cell.token}
+                                probability={cell.probability}
+                                baseColor={baseColor}
+                                promptId={prompt.id}
+                                isDraggable={!isDropTarget && !isResult}
+                                isSelected={isSelected}
+                                isHighlighted={isHighlight}
+                                isIntervention={isIntervention}
+                                onClick={() => onCellClick?.(tokenPos, layerValue)}
+                                animationDelay={animationDelay}
+                                highlightRef={isHighlight ? onHighlightRefChange : undefined}
+                                width={cellWidth}
+                                height={cellHeight}
+                                fontSize={cellFontSize}
+                                showRightChevron={showRightChevron}
+                                showDownChevron={showDownChevron}
+                                chevronColor={baseColor}
+                              />
                             )}
                           </div>
                         );
                       })}
                     </div>
-
-                    {/* Vertical arrow gutter row: a narrow row of height vertArrowHeight
-                        between adjacent token rows. Structure mirrors the token row:
-                        sticky-left spacer of tokenColWidth, then one cellWidth-wide
-                        arrow container per layer, with horizArrowWidth spacers between.
-                        Each arrow container centers the small arrow glyph. The row is
-                        pointer-events: none since arrows are decorative. */}
-                    {!isLastDisplayRow && nextTokenPos != null && (
-                      <div
-                        className="flex items-center"
-                        style={{
-                          marginBottom: 8,
-                          pointerEvents: 'none',
-                        }}
-                      >
-                        {/* Left spacer matching sticky token-label column */}
-                        <div
-                          className="shrink-0"
-                          style={{
-                            width: tokenColWidth,
-                            height: vertArrowHeight,
-                            position: 'sticky',
-                            left: 0,
-                            zIndex: 1,
-                            ...stickyLeftShadow,
-                          }}
-                        />
-                        {displayLayers.map((layerValue, displayColIdx) => {
-                          const layerIdx = displayLayerIndices[displayColIdx];
-                          const suppressIncomingVertical =
-                            isResult &&
-                            interventionCell != null &&
-                            nextTokenPos === interventionCell.tokenPosition &&
-                            layerValue === interventionCell.layer;
-                          // Color by origin cell, mirroring the horizontal arrow.
-                          // Coloring by destination made arrows from unaffected
-                          // (pink) cells into mixed (purple) cells render purple.
-                          // getBaseColor at the intervention cell already returns
-                          // sourceColor (cyan), so no explicit outgoing override.
-                          const vertArrowColor = getBaseColor(tokenPos, layerIdx);
-                          return (
-                            <div
-                              key={`varrow-${tokenPos}-${layerValue}`}
-                              className="flex items-center"
-                            >
-                              <div
-                                style={{
-                                  width: cellWidth,
-                                  height: vertArrowHeight,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                }}
-                              >
-                                {suppressIncomingVertical ? (
-                                  <div
-                                    style={{
-                                      width: cellWidth,
-                                      height: vertArrowHeight,
-                                      flexShrink: 0,
-                                    }}
-                                  />
-                                ) : (
-                                  <VerticalFlowArrow
-                                    color={vertArrowColor}
-                                  />
-                                )}
-                              </div>
-                              {displayColIdx < displayLayers.length - 1 && (
-                                <div
-                                  style={{
-                                    width: horizArrowWidth,
-                                    height: vertArrowHeight,
-                                  }}
-                                />
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
                   </div>
                 );
               })}
@@ -468,7 +367,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                     ...stickyLeftShadow,
                   }}
                 />
-                {displayLayers.map((layerValue, idx) => (
+                {displayLayers.map((layerValue) => (
                   <div key={`bottom-${layerValue}`} className="flex items-center">
                     <div
                       className="text-center font-bold text-gray-800"
@@ -483,9 +382,6 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                     >
                       {layerValue}
                     </div>
-                    {idx < displayLayers.length - 1 && (
-                      <div style={{ width: horizArrowWidth, height: Math.max(24, cellHeight * 0.6) }} />
-                    )}
                   </div>
                 ))}
               </div>
@@ -559,6 +455,9 @@ interface DropTargetCellProps {
   width: number;
   height: number;
   fontSize: number;
+  showRightChevron?: boolean;
+  showDownChevron?: boolean;
+  chevronColor?: string;
 }
 
 const DropTargetCell: React.FC<DropTargetCellProps> = ({
@@ -577,6 +476,9 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
   width,
   height,
   fontSize,
+  showRightChevron,
+  showDownChevron,
+  chevronColor,
 }) => {
   const [{ isOver, canDrop }, drop] = useDrop(
     () => ({
@@ -620,6 +522,9 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           width={width}
           height={height}
           fontSize={fontSize}
+          showRightChevron={showRightChevron}
+          showDownChevron={showDownChevron}
+          chevronColor={chevronColor}
         />
       </motion.div>
     </div>

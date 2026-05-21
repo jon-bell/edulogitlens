@@ -1,6 +1,7 @@
 import React from 'react';
 import { useDrag } from 'react-dnd';
 import { motion } from 'motion/react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
 
 interface HeatmapCellProps {
   tokenPosition: number;
@@ -19,6 +20,9 @@ interface HeatmapCellProps {
   width?: number;
   height?: number;
   fontSize?: number;
+  showRightChevron?: boolean;
+  showDownChevron?: boolean;
+  chevronColor?: string;
 }
 
 function parseHex(hex: string): { r: number; g: number; b: number } {
@@ -59,7 +63,16 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   width = 72,
   height = 48,
   fontSize = 12,
+  showRightChevron = false,
+  showDownChevron = false,
+  chevronColor,
 }) => {
+  // Scale the inline border chevrons with the cell size, mirroring
+  // LogitLensGrid's treatment (base ~16px at 1x, strokeWidth 2.25,
+  // opacity 0.85). The cell's nominal width is 72 at zoom=100, so
+  // width / 72 recovers the effective zoom factor.
+  const chevronSize = Math.max(16, 16 * (width / 72));
+  const flowColor = chevronColor ?? baseColor;
   const [{ isDragging }, drag] = useDrag(
     () => ({
       type: 'HEATMAP_CELL',
@@ -133,6 +146,41 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
         >
           {predictedToken}
         </span>
+        {/* Inline border chevrons: drawn ON the right/bottom borders so each
+            cell visibly feeds the next one, replacing the old gutter arrows.
+            pointer-events:none keeps drag/drop and click unaffected. */}
+        {showRightChevron && (
+          <ChevronRight
+            size={chevronSize}
+            strokeWidth={2.25}
+            style={{
+              position: 'absolute',
+              top: '50%',
+              right: 0,
+              transform: 'translate(50%, -50%)',
+              color: flowColor,
+              opacity: 0.85,
+              pointerEvents: 'none',
+              zIndex: 1,
+            }}
+          />
+        )}
+        {showDownChevron && (
+          <ChevronDown
+            size={chevronSize}
+            strokeWidth={2.25}
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: '50%',
+              transform: 'translate(-50%, 50%)',
+              color: flowColor,
+              opacity: 0.85,
+              pointerEvents: 'none',
+              zIndex: 1,
+            }}
+          />
+        )}
       </motion.div>
     </div>
   );
