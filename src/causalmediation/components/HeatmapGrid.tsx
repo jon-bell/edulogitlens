@@ -213,7 +213,122 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             }}
             onScroll={handleScroll}
           >
-            <div className="inline-block min-w-full pt-4">
+            <div className="inline-block min-w-full pt-4" style={{ position: 'relative' }}>
+              {(() => {
+                // Grid-level highlight overlays. Painted BEHIND the cells so
+                // they only show through the gutters/empty space around them
+                // — the cells' opaque probability backgrounds cover the tint
+                // where they sit. Layered in order: cone (largest), then
+                // column and row bands. Cells must have z-index >= 1 (set on
+                // their wrapper below) to sit above these.
+                const selHere =
+                  selectedCell?.promptId === prompt.id ? selectedCell : null;
+                if (!selHere) return null;
+                const selRowDispIdx = displayTokenIndices.indexOf(selHere.tokenPosition);
+                const selColDispIdx = displayLayerIndices.indexOf(allLayers.indexOf(selHere.layer));
+                if (selRowDispIdx < 0 || selColDispIdx < 0) return null;
+
+                // Geometry of the inline-block content. pt-4 (= 16px) is the
+                // top padding; axis title row + sticky layer-number row sit
+                // above the cells.
+                const axisTitleH = axisTitleFontSize * 1.2 + 4; // text + mb-1
+                const stickyHeaderH = Math.max(24, cellHeight * 0.6) + 8; // + mb-2
+                const preRowsH = 16 + axisTitleH + stickyHeaderH;
+                const rowBlockH = cellHeight + 8 + vertArrowHeight + 8;
+                const halfGutter = (8 + vertArrowHeight + 8) / 2;
+
+                // Cell-row top for display index d.
+                const cellRowTop = (d: number) => preRowsH + d * rowBlockH;
+                // Cell-column left for display index j.
+                const cellColLeft = (j: number) =>
+                  tokenColWidth + j * (cellWidth + horizArrowWidth);
+
+                // Cone rectangle: top-left of grid down to bottom-right of
+                // selected cell.
+                const coneLeft = tokenColWidth;
+                const coneTop = preRowsH;
+                const coneWidth =
+                  (selColDispIdx + 1) * (cellWidth + horizArrowWidth) - horizArrowWidth;
+                const coneHeight = cellRowTop(selRowDispIdx) + cellHeight - preRowsH;
+
+                // Column band spans every row at the selected column.
+                const colLeft = cellColLeft(selColDispIdx);
+                const colTop = preRowsH;
+                const totalRowsH =
+                  (displayTokens.length - 1) * rowBlockH + cellHeight; // no trailing gutter on last row
+                const colHeight = totalRowsH;
+
+                // Row band spans every column at the selected row, with the
+                // vertical-arrow gutters above/below split 50/50 between
+                // adjacent rows.
+                const rowTop = cellRowTop(selRowDispIdx) - (selRowDispIdx > 0 ? halfGutter : 0);
+                const rowHeight =
+                  cellHeight +
+                  (selRowDispIdx > 0 ? halfGutter : 0) +
+                  (selRowDispIdx < displayTokens.length - 1 ? halfGutter : 0);
+                const rowLeft = tokenColWidth;
+                const totalColsW =
+                  displayLayers.length * cellWidth + (displayLayers.length - 1) * horizArrowWidth;
+
+                const hl = (() => {
+                  const c = prompt.color.replace('#', '');
+                  const full = c.length === 3 ? c.split('').map((x) => x + x).join('') : c;
+                  return {
+                    r: parseInt(full.slice(0, 2), 16),
+                    g: parseInt(full.slice(2, 4), 16),
+                    b: parseInt(full.slice(4, 6), 16),
+                  };
+                })();
+                const tintWeak = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;
+                const tintStrong = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;
+
+                const overlayBase: React.CSSProperties = {
+                  position: 'absolute',
+                  pointerEvents: 'none',
+                  // z-index -1 keeps the overlays below the parent's static-
+                  // flow children (cells, gutters, chevrons) while still being
+                  // visible because the parent has no background fill.
+                  zIndex: -1,
+                };
+
+                return (
+                  <>
+                    {/* Cone underlay (weakest tint). */}
+                    <div
+                      style={{
+                        ...overlayBase,
+                        left: coneLeft,
+                        top: coneTop,
+                        width: coneWidth,
+                        height: coneHeight,
+                        backgroundColor: tintWeak,
+                      }}
+                    />
+                    {/* Column band (mid tint). */}
+                    <div
+                      style={{
+                        ...overlayBase,
+                        left: colLeft,
+                        top: colTop,
+                        width: cellWidth,
+                        height: colHeight,
+                        backgroundColor: tintStrong,
+                      }}
+                    />
+                    {/* Row band (mid tint). */}
+                    <div
+                      style={{
+                        ...overlayBase,
+                        left: rowLeft,
+                        top: rowTop,
+                        width: totalColsW,
+                        height: rowHeight,
+                        backgroundColor: tintStrong,
+                      }}
+                    />
+                  </>
+                );
+              })()}
               {/* X-axis title (top) — scrolls with content, not sticky */}
               <div className="flex items-center mb-1">
                 <div className="shrink-0" style={{ width: tokenColWidth }} />
@@ -381,11 +496,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
-                                  inColumn={inColumn}
-                                  inRow={inRow}
-                                  inCone={inCone}
                                   isOutsideCrosshair={isOutsideCrosshair}
-                                  highlightColor={prompt.color}
                                 />
                               ) : (
                                 <HeatmapCell
@@ -405,11 +516,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
-                                  inColumn={inColumn}
-                                  inRow={inRow}
-                                  inCone={inCone}
                                   isOutsideCrosshair={isOutsideCrosshair}
-                                  highlightColor={prompt.color}
                                 />
                               )}
                             </div>
@@ -628,11 +735,7 @@ interface DropTargetCellProps {
   width: number;
   height: number;
   fontSize: number;
-  inColumn?: boolean;
-  inRow?: boolean;
-  inCone?: boolean;
   isOutsideCrosshair?: boolean;
-  highlightColor?: string;
 }
 
 const DropTargetCell: React.FC<DropTargetCellProps> = ({
@@ -651,11 +754,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
   width,
   height,
   fontSize,
-  inColumn,
-  inRow,
-  inCone,
   isOutsideCrosshair,
-  highlightColor,
 }) => {
   const [{ isOver, canDrop }, drop] = useDrop(
     () => ({
@@ -699,11 +798,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           width={width}
           height={height}
           fontSize={fontSize}
-          inColumn={inColumn}
-          inRow={inRow}
-          inCone={inCone}
           isOutsideCrosshair={isOutsideCrosshair}
-          highlightColor={highlightColor}
         />
       </motion.div>
     </div>
