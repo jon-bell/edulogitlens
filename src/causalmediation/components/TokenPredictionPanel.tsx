@@ -43,7 +43,10 @@ export const TokenPredictionPanel: React.FC<TokenPredictionPanelProps> = ({
           drag
           dragMomentum={false}
           dragElastic={0}
-          className="fixed right-8 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 p-6 z-50"
+          // Default position is over the controls/prompt panel on the LEFT —
+          // floating over the heatmap covered part of the data the user just
+          // clicked. Still draggable: the user can move it anywhere.
+          className="fixed left-8 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 p-6 z-50"
           style={{ top: '15vh' }}
         >
           <button
