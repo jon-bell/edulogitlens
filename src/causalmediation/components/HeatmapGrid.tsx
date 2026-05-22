@@ -207,7 +207,10 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             ref={scrollRef}
             className="overflow-auto px-4 pb-4 w-full"
             style={{
-              maxHeight: '60vh',
+              // Bumped from 60vh so autofit can pick more rows when fitting
+              // a large heatmap to the viewport; below this autofit kicks in
+              // and downsamples token/layer step.
+              maxHeight: '82vh',
               position: 'relative',
               scrollBehavior: isScrollControlled ? 'auto' : undefined,
             }}
