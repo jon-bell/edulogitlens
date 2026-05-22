@@ -276,13 +276,18 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 const totalColsW =
                   displayLayers.length * cellWidth + (displayLayers.length - 1) * horizArrowWidth;
 
-                // HIGH-CONTRAST debug colors so we can verify the overlay
-                // rectangles are landing where intended. Once confirmed, swap
-                // back to prompt-color tints (commented below).
-                const tintWeak = 'rgba(0, 200, 255, 0.55)';   // cone (cyan)
-                const tintColumn = 'rgba(255, 0, 200, 0.7)';   // column (magenta)
-                const tintRow = 'rgba(255, 200, 0, 0.7)';      // row (yellow)
-                // const hl = (() => { ... }); // prompt-color version
+                const hl = (() => {
+                  const c = prompt.color.replace('#', '');
+                  const full = c.length === 3 ? c.split('').map((x) => x + x).join('') : c;
+                  return {
+                    r: parseInt(full.slice(0, 2), 16),
+                    g: parseInt(full.slice(2, 4), 16),
+                    b: parseInt(full.slice(4, 6), 16),
+                  };
+                })();
+                const tintWeak = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;    // cone
+                const tintColumn = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;  // column band
+                const tintRow = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;     // row band
 
                 const overlayBase: React.CSSProperties = {
                   position: 'absolute',
