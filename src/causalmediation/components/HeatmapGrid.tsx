@@ -213,7 +213,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             }}
             onScroll={handleScroll}
           >
-            <div className="inline-block min-w-full pt-4" style={{ position: 'relative' }}>
+            <div
+              className="inline-block min-w-full pt-4"
+              // `isolation: isolate` creates a new stacking context so the
+              // z-index:-1 overlay children below stay BEHIND the cells but
+              // do not escape upward through the white card background.
+              style={{ position: 'relative', isolation: 'isolate' }}
+            >
               {(() => {
                 // Grid-level highlight overlays. Painted BEHIND the cells so
                 // they only show through the gutters/empty space around them
@@ -270,17 +276,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 const totalColsW =
                   displayLayers.length * cellWidth + (displayLayers.length - 1) * horizArrowWidth;
 
-                const hl = (() => {
-                  const c = prompt.color.replace('#', '');
-                  const full = c.length === 3 ? c.split('').map((x) => x + x).join('') : c;
-                  return {
-                    r: parseInt(full.slice(0, 2), 16),
-                    g: parseInt(full.slice(2, 4), 16),
-                    b: parseInt(full.slice(4, 6), 16),
-                  };
-                })();
-                const tintWeak = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;
-                const tintStrong = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;
+                // HIGH-CONTRAST debug colors so we can verify the overlay
+                // rectangles are landing where intended. Once confirmed, swap
+                // back to prompt-color tints (commented below).
+                const tintWeak = 'rgba(0, 200, 255, 0.55)';   // cone (cyan)
+                const tintColumn = 'rgba(255, 0, 200, 0.7)';   // column (magenta)
+                const tintRow = 'rgba(255, 200, 0, 0.7)';      // row (yellow)
+                // const hl = (() => { ... }); // prompt-color version
 
                 const overlayBase: React.CSSProperties = {
                   position: 'absolute',
@@ -293,7 +295,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
                 return (
                   <>
-                    {/* Cone underlay (weakest tint). */}
+                    {/* Cone underlay (cyan, debug). */}
                     <div
                       style={{
                         ...overlayBase,
@@ -304,7 +306,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         backgroundColor: tintWeak,
                       }}
                     />
-                    {/* Column band (mid tint). */}
+                    {/* Column band (magenta, debug). */}
                     <div
                       style={{
                         ...overlayBase,
@@ -312,10 +314,10 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         top: colTop,
                         width: cellWidth,
                         height: colHeight,
-                        backgroundColor: tintStrong,
+                        backgroundColor: tintColumn,
                       }}
                     />
-                    {/* Row band (mid tint). */}
+                    {/* Row band (yellow, debug). */}
                     <div
                       style={{
                         ...overlayBase,
@@ -323,7 +325,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         top: rowTop,
                         width: totalColsW,
                         height: rowHeight,
-                        backgroundColor: tintStrong,
+                        backgroundColor: tintRow,
                       }}
                     />
                   </>
