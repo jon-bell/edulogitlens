@@ -19,18 +19,12 @@ interface HeatmapCellProps {
   width?: number;
   height?: number;
   fontSize?: number;
-  // Crosshair highlight when a cell is selected: the column it sits in is
-  // "everything this layer produced in one parallel forward pass," and the
-  // row it sits in is "this token's prediction trajectory through depth."
-  // The causal cone (strictly earlier layers, equal-or-earlier positions)
-  // is the set of cells whose outputs were actually available to compute
-  // the selected cell — rendered as a subtle tint underlay. Cells outside
-  // the crosshair AND the cone get dimmed.
-  inColumn?: boolean;
-  inRow?: boolean;
-  inCone?: boolean;
+  // When a cell is selected somewhere in this grid, every cell that is NOT
+  // in the row, column, or causal cone gets dimmed so the highlighted region
+  // pops. The actual row/column/cone tints are painted at GRID level (in
+  // HeatmapGrid) so they show through the gutters between cells; cells keep
+  // their probability backgrounds intact.
   isOutsideCrosshair?: boolean;
-  highlightColor?: string;
 }
 
 function parseHex(hex: string): { r: number; g: number; b: number } {
@@ -71,11 +65,7 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   width = 72,
   height = 48,
   fontSize = 12,
-  inColumn = false,
-  inRow = false,
-  inCone = false,
   isOutsideCrosshair = false,
-  highlightColor = '#8844ff',
 }) => {
   const [{ isDragging }, drag] = useDrag(
     () => ({
@@ -99,12 +89,6 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
 
   const bg = probabilityToBg(baseColor, probability);
   const textColor = probability < 0.5 ? '#1f2937' : '#ffffff';
-  const hl = parseHex(highlightColor);
-  // Background-tint overlays for the three highlight regions. Cells that fall
-  // in more than one region stack the overlays naturally — e.g. a cell in
-  // BOTH the cone and the column reads darker than a cone-only cell.
-  const coneFill = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;
-  const crosshairFill = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;
 
   return (
     <div
@@ -157,40 +141,13 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
           {predictedToken}
         </span>
 
-        {/* Dim cells that are neither in the crosshair nor in the causal
-            cone, so the selected cell's column, row, and input-dependency
-            rectangle all visually pop. Mutually exclusive with inColumn /
-            inRow / inCone / isSelected on the same cell. */}
+        {/* Dim cells outside the row/column/cone so the highlighted region
+            pops. The actual region tints are painted at GRID level and
+            show through the gutters between cells. */}
         {isOutsideCrosshair && (
           <div
             className="absolute inset-0 pointer-events-none"
             style={{ backgroundColor: 'rgba(255, 255, 255, 0.65)' }}
-          />
-        )}
-        {/* Causal cone underlay: cells whose outputs actually fed into the
-            selected cell (strictly earlier layers, equal-or-earlier positions
-            under the causal mask). Drawn before the crosshair rings so they
-            sit on top of it cleanly. */}
-        {inCone && !isSelected && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{ backgroundColor: coneFill }}
-          />
-        )}
-        {/* Crosshair arms as background tints (stacked, so cells in both arms
-            read strongest). Column = this layer's parallel output across
-            positions; row = this token's depth trajectory. Not drawn on the
-            selected cell itself — it already carries the yellow outline. */}
-        {inColumn && !isSelected && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{ backgroundColor: crosshairFill }}
-          />
-        )}
-        {inRow && !isSelected && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{ backgroundColor: crosshairFill }}
           />
         )}
       </motion.div>
