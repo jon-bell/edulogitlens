@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, RotateCcw, ChevronRight, ChevronDown } from 'lucide-react';
 
 export interface LogitCell {
   token: string;
@@ -66,18 +67,63 @@ const THEME = {
   probText: '#4b5563',
 } as const;
 
-interface LogitLensGridProps {
-  data: LogitLensData;
+export type LogitLensVariant = "default" | "compact";
+
+export interface LogitLensHighlight {
+  layer: number;
+  position: number;
 }
 
-export function LogitLensGrid({ data }: LogitLensGridProps) {
+export interface LogitLensScrollState {
+  scrollLeft: number;
+  scrollTop: number;
+}
+
+export type LogitLensTooltipTarget =
+  | { kind: "cell"; layer: number; position: number }
+  | { kind: "column"; position: number }
+  | { kind: "layer"; layer: number };
+
+interface LogitLensGridProps {
+  data: LogitLensData;
+  variant?: LogitLensVariant;
+  onCellClick?: (layer: number, position: number) => void;
+  highlight?: LogitLensHighlight | null;
+  onScroll?: (state: LogitLensScrollState) => void;
+  scrollState?: LogitLensScrollState;
+  tooltipFor?: (target: LogitLensTooltipTarget) => ReactNode;
+}
+
+export function LogitLensGrid({
+  data,
+  variant = "default",
+  onCellClick,
+  highlight,
+  onScroll,
+  scrollState,
+  tooltipFor,
+}: LogitLensGridProps) {
+  const isCompact = variant === "compact";
+  const isHighlightControlled = highlight !== undefined;
+  const isScrollControlled = scrollState !== undefined;
   const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number } | null>(null);
   const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
+  const [internalHighlight, setInternalHighlight] = useState<LogitLensHighlight | null>(null);
+  const [tooltipState, setTooltipState] = useState<{
+    target: LogitLensTooltipTarget;
+    x: number;
+    y: number;
+  } | null>(null);
   const [showGeneration, setShowGeneration] = useState(false);
   const [zoomLevel, setZoomLevel] = useState<number | null>(null);
   const [tokenStep, setTokenStep] = useState(1);
   const [layerStep, setLayerStep] = useState(1);
+  const [autoFit, setAutoFit] = useState(true);
+  const [scrollSize, setScrollSize] = useState<{ width: number; height: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Suppress re-firing onScroll when we programmatically set scrollLeft/Top from a controlled scrollState.
+  const ignoreNextScrollRef = useRef(false);
 
   // Start at zoom=1 and let the grid scroll horizontally if it doesn't fit.
   const computeFitZoom = useCallback(() => {
@@ -89,10 +135,42 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
     setZoomLevel(computeFitZoom());
   }, [computeFitZoom]);
 
+  useEffect(() => {
+    if (!isScrollControlled || !scrollState) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollLeft === scrollState.scrollLeft && el.scrollTop === scrollState.scrollTop) return;
+    ignoreNextScrollRef.current = true;
+    el.scrollLeft = scrollState.scrollLeft;
+    el.scrollTop = scrollState.scrollTop;
+  }, [isScrollControlled, scrollState?.scrollLeft, scrollState?.scrollTop, scrollState]);
+
+  // Measure the scroll container so auto-fit can pick token/layer steps that
+  // make the whole grid fit without scrolling.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const update = () => setScrollSize({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // If zoom hasn't been computed yet, render nothing until we can measure
   const effectiveZoom = zoomLevel ?? 1;
 
   const handleCellClick = (row: number, col: number) => {
+    const actualPosition = filteredTokenIndices[row];
+    const actualLayer = filteredLayerIndices[col];
+    onCellClick?.(actualLayer, actualPosition);
+
+    if (!isHighlightControlled) {
+      const alreadyHighlighted =
+        internalHighlight?.layer === actualLayer && internalHighlight.position === actualPosition;
+      setInternalHighlight(alreadyHighlighted ? null : { layer: actualLayer, position: actualPosition });
+    }
+
     if (selectedCell?.row === row && selectedCell?.col === col) {
       setSelectedCell(null);
       setShowGeneration(false);
@@ -102,38 +180,128 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
     }
   };
 
+  const handleOutsideClick = () => {
+    if (!isHighlightControlled) {
+      setInternalHighlight(null);
+    }
+  };
+
+  const handleTooltipEnter = (
+    target: LogitLensTooltipTarget,
+    e: React.MouseEvent<HTMLElement>,
+  ) => {
+    if (!tooltipFor) return;
+    const rect = (containerRef.current ?? e.currentTarget).getBoundingClientRect();
+    setTooltipState({
+      target,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
+  const handleTooltipMove = (e: React.MouseEvent<HTMLElement>) => {
+    if (!tooltipFor || !tooltipState) return;
+    const rect = (containerRef.current ?? e.currentTarget).getBoundingClientRect();
+    setTooltipState({
+      target: tooltipState.target,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  };
+  const handleTooltipLeave = () => {
+    if (tooltipState) setTooltipState(null);
+  };
+
   const handleZoomIn = () => setZoomLevel(prev => Math.min((prev ?? 1) + 0.25, 3));
   const handleZoomOut = () => setZoomLevel(prev => Math.max((prev ?? 1) - 0.25, 0.5));
   const handleResetZoom = () => {
     setZoomLevel(computeFitZoom());
     setTokenStep(1);
     setLayerStep(1);
+    setAutoFit(true); // re-enable auto-fit
   };
 
   const handleTokenStepChange = (value: number) => {
+    setAutoFit(false); // manual override
     setTokenStep(value);
     setSelectedCell(null); // Clear selection when step changes
   };
 
   const handleLayerStepChange = (value: number) => {
+    setAutoFit(false); // manual override
     setLayerStep(value);
     setSelectedCell(null); // Clear selection when step changes
   };
 
+  // Auto-fit: derive token/layer steps from the measured scroll container so
+  // the entire grid fits without scrolling. Cell footprint is the unzoomed
+  // baseCellSize; we reserve the label column, header rows, the legend, and
+  // the container padding before counting how many cells fit.
+  const autoStep = useMemo(() => {
+    const numTokens = data.tokens.length;
+    const numLayers = data.layers.length;
+    if (!scrollSize || numTokens === 0 || numLayers === 0) {
+      return { tokenStep: 1, layerStep: 1 };
+    }
+    const footprint = isCompact ? 48 : 64;
+    const reservedLabelCol = 80; // labelColWidth
+    const reservedHeader = (isCompact ? 22 : 28) + 40; // headerRowHeight + legend
+    const padding = 48; // ~24px padding each side
+
+    const layersThatFit = Math.max(
+      1,
+      Math.floor((scrollSize.width - reservedLabelCol - padding) / footprint),
+    );
+    const tokensThatFit = Math.max(
+      1,
+      Math.floor((scrollSize.height - reservedHeader - padding) / footprint),
+    );
+
+    return {
+      layerStep: Math.max(1, Math.ceil(numLayers / layersThatFit)),
+      tokenStep: Math.max(1, Math.ceil(numTokens / tokensThatFit)),
+    };
+  }, [scrollSize, data.tokens.length, data.layers.length, isCompact]);
+
+  const effectiveTokenStep = autoFit ? autoStep.tokenStep : tokenStep;
+  const effectiveLayerStep = autoFit ? autoStep.layerStep : layerStep;
+
   // Filter data based on step sizes, always including the last element
   const filteredTokenIndices = data.tokens
     .map((_, idx) => idx)
-    .filter((idx) => idx % tokenStep === 0 || idx === data.tokens.length - 1);
+    .filter((idx) => idx % effectiveTokenStep === 0 || idx === data.tokens.length - 1);
   const filteredTokens = filteredTokenIndices.map(idx => data.tokens[idx]);
-  
+
   const filteredLayerIndices = data.layers
     .map((_, idx) => idx)
-    .filter((idx) => idx % layerStep === 0 || idx === data.layers.length - 1);
+    .filter((idx) => idx % effectiveLayerStep === 0 || idx === data.layers.length - 1);
   const filteredLayers = filteredLayerIndices.map(idx => data.layers[idx]);
   
-  const filteredData = filteredTokenIndices.map(tokenIdx => 
+  const filteredData = filteredTokenIndices.map(tokenIdx =>
     filteredLayerIndices.map(layerIdx => data.data[tokenIdx][layerIdx])
   );
+
+  const effectiveHighlight: LogitLensHighlight | null = isHighlightControlled
+    ? highlight ?? null
+    : internalHighlight;
+
+  // Translate the (layer, position) public API to the widget's internal (row=position, col=layer) indexing,
+  // accounting for the user's token/layer step filtering. If the highlighted target was filtered out we
+  // hide the overlay rather than snapping to a different cell.
+  const highlightRow = effectiveHighlight
+    ? filteredTokenIndices.indexOf(effectiveHighlight.position)
+    : -1;
+  const highlightCol = effectiveHighlight
+    ? filteredLayerIndices.indexOf(effectiveHighlight.layer)
+    : -1;
+  const hasHighlight = highlightRow >= 0 && highlightCol >= 0;
+  const useNewHighlightLayer = isHighlightControlled || onCellClick !== undefined;
+
+  const isContextCell = (row: number, col: number) =>
+    hasHighlight && row <= highlightRow && col <= highlightCol;
+  const isGeneratedStackCell = (row: number, col: number) =>
+    hasHighlight && row === highlightRow;
+  const isHighlightTarget = (row: number, col: number) =>
+    hasHighlight && row === highlightRow && col === highlightCol;
 
   // Validate selected cell is within bounds
   const isValidSelection = selectedCell && 
@@ -142,9 +310,13 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
     selectedCell.row >= 0 &&
     selectedCell.col >= 0;
 
-  const cellSize = 64 * effectiveZoom;
+  const baseCellSize = isCompact ? 48 : 64;
+  const cellSize = baseCellSize * effectiveZoom;
   const labelColWidth = Math.max(80, 80 * effectiveZoom);
-  const headerRowHeight = 28;
+  const headerRowHeight = isCompact ? 22 : 28;
+  const cellFontSize = isCompact
+    ? Math.max(10, 10 * effectiveZoom)
+    : Math.max(12, 12 * effectiveZoom);
 
   const getBackgroundColor = (prob: number) => {
     const { r, g, b } = THEME.heatmapBase;
@@ -236,7 +408,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
               type="number"
               min="1"
               max="10"
-              value={tokenStep}
+              value={effectiveTokenStep}
               onChange={(e) => handleTokenStepChange(Math.max(1, parseInt(e.target.value) || 1))}
               style={{ width: '4rem', padding: '0.25rem 0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem' }}
             />
@@ -252,11 +424,15 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
               type="number"
               min="1"
               max="10"
-              value={layerStep}
+              value={effectiveLayerStep}
               onChange={(e) => handleLayerStepChange(Math.max(1, parseInt(e.target.value) || 1))}
               style={{ width: '4rem', padding: '0.25rem 0.5rem', border: '1px solid #d1d5db', borderRadius: '0.25rem', fontSize: '0.875rem' }}
             />
           </div>
+
+          {autoFit && (
+            <span style={{ fontSize: '0.75rem', fontWeight: 500, color: '#6b7280', flexShrink: 0 }}>(auto)</span>
+          )}
         </div>
 
         <div style={{ fontSize: '0.875rem', color: '#4b5563', flexShrink: 0, whiteSpace: 'nowrap' }}>
@@ -267,7 +443,25 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
       {/* Main content area with heatmap box and side panel */}
       <div style={{ flex: '1 1 0px', display: 'flex', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
         {/* Heatmap box — scrolls independently, never affects siblings */}
-        <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: '16rem', overflow: 'auto', padding: '1.5rem', scrollBehavior: 'smooth', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}>
+        <div
+          ref={scrollRef}
+          onClick={(e) => {
+            const target = e.target as HTMLElement | null;
+            if (target && !target.closest('.logitlens-heatmap-cell')) {
+              handleOutsideClick();
+            }
+          }}
+          onScroll={(e) => {
+            if (ignoreNextScrollRef.current) {
+              ignoreNextScrollRef.current = false;
+              return;
+            }
+            if (!onScroll) return;
+            const el = e.currentTarget;
+            onScroll({ scrollLeft: el.scrollLeft, scrollTop: el.scrollTop });
+          }}
+          style={{ position: 'absolute', top: 0, left: 0, bottom: 0, right: '16rem', overflow: 'auto', padding: '1.5rem', scrollBehavior: isScrollControlled ? 'auto' : 'smooth', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}
+        >
           {/* Horizontal color scale legend — above the heatmap */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <span style={{ fontSize: 11, fontWeight: 500, color: THEME.textBody }}>Probability</span>
@@ -310,6 +504,9 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                   {filteredLayers.map((layer) => (
                     <div
                       key={layer}
+                      onMouseEnter={tooltipFor ? (e) => handleTooltipEnter({ kind: "layer", layer }, e) : undefined}
+                      onMouseMove={tooltipFor ? handleTooltipMove : undefined}
+                      onMouseLeave={tooltipFor ? handleTooltipLeave : undefined}
                       style={{
                         width: cellSize,
                         height: headerRowHeight,
@@ -336,7 +533,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                     flexShrink: 0,
                     paddingRight: 12,
                     textAlign: 'right',
-                    fontSize: Math.max(12, 12 * effectiveZoom),
+                    fontSize: cellFontSize,
                     fontWeight: 500,
                   }}
                 >
@@ -345,6 +542,9 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                     return (
                       <div
                         key={actualRowIdx}
+                        onMouseEnter={tooltipFor ? (e) => handleTooltipEnter({ kind: "column", position: actualRowIdx }, e) : undefined}
+                        onMouseMove={tooltipFor ? handleTooltipMove : undefined}
+                        onMouseLeave={tooltipFor ? handleTooltipLeave : undefined}
                         style={{
                           height: cellSize,
                           display: 'flex',
@@ -377,6 +577,9 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                       const hasRedBox = shouldShowRedBox(displayRowIdx, displayColIdx);
                       const hasSelectedBox = shouldShowSelectedBox(displayRowIdx, displayColIdx);
                       const isSelected = selectedCell?.row === displayRowIdx && selectedCell?.col === displayColIdx;
+                      const inContext = useNewHighlightLayer && isContextCell(displayRowIdx, displayColIdx);
+                      const inGenerated = useNewHighlightLayer && isGeneratedStackCell(displayRowIdx, displayColIdx);
+                      const isHighlightTargetCell = useNewHighlightLayer && isHighlightTarget(displayRowIdx, displayColIdx);
 
                       return (
                         <div
@@ -387,16 +590,69 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                             height: cellSize,
                             ...getCellStyle(displayRowIdx, displayColIdx, cellData.probability),
                           }}
-                          onMouseEnter={() => setHoveredCell({ row: displayRowIdx, col: displayColIdx })}
-                          onMouseLeave={() => setHoveredCell(null)}
+                          onMouseEnter={(e) => {
+                            setHoveredCell({ row: displayRowIdx, col: displayColIdx });
+                            handleTooltipEnter(
+                              {
+                                kind: "cell",
+                                layer: filteredLayerIndices[displayColIdx],
+                                position: filteredTokenIndices[displayRowIdx],
+                              },
+                              e,
+                            );
+                          }}
+                          onMouseMove={handleTooltipMove}
+                          onMouseLeave={() => {
+                            setHoveredCell(null);
+                            handleTooltipLeave();
+                          }}
                           onClick={() => handleCellClick(displayRowIdx, displayColIdx)}
                         >
                           <div
                             className="logitlens-heatmap-cell-token absolute inset-0 flex items-center justify-center font-medium"
-                            style={{ fontSize: Math.max(12, 12 * effectiveZoom), color: getTextColor(cellData.probability) }}
+                            style={{ fontSize: cellFontSize, color: getTextColor(cellData.probability) }}
                           >
                             {cellData.token}
                           </div>
+                          {/*
+                            Compact-variant chevrons embedded in the cell border so
+                            each cell visibly feeds the next one. Right chevron points
+                            to the next layer; down chevron to the next token position.
+                            Both are suppressed at the right/bottom edge to avoid
+                            chevrons pointing at nothing.
+                          */}
+                          {isCompact && displayColIdx < filteredLayers.length - 1 && (
+                            <ChevronRight
+                              size={Math.max(16, 16 * effectiveZoom)}
+                              strokeWidth={2.25}
+                              className="logitlens-heatmap-cell-chevron pointer-events-none"
+                              style={{
+                                position: 'absolute',
+                                top: '50%',
+                                right: 0,
+                                transform: 'translate(50%, -50%)',
+                                color: getTextColor(cellData.probability),
+                                opacity: 0.85,
+                                zIndex: 1,
+                              }}
+                            />
+                          )}
+                          {isCompact && displayRowIdx < filteredTokens.length - 1 && (
+                            <ChevronDown
+                              size={Math.max(16, 16 * effectiveZoom)}
+                              strokeWidth={2.25}
+                              className="logitlens-heatmap-cell-chevron pointer-events-none"
+                              style={{
+                                position: 'absolute',
+                                bottom: 0,
+                                left: '50%',
+                                transform: 'translate(-50%, 50%)',
+                                color: getTextColor(cellData.probability),
+                                opacity: 0.85,
+                                zIndex: 1,
+                              }}
+                            />
+                          )}
                           {hasRedBox && (
                             <div
                               className="logitlens-heatmap-overlay logitlens-heatmap-overlay-red absolute inset-0 border-red-500 pointer-events-none"
@@ -413,6 +669,28 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
                             <div
                               className="logitlens-heatmap-overlay logitlens-heatmap-overlay-yellow absolute inset-0 border-yellow-400 pointer-events-none"
                               style={{ borderWidth: Math.max(4, 4 * effectiveZoom) }}
+                            />
+                          )}
+                          {inContext && !isHighlightTargetCell && (
+                            <div
+                              className="logitlens-heatmap-overlay logitlens-heatmap-overlay-context absolute inset-0 pointer-events-none"
+                              style={{ backgroundColor: 'rgba(136, 68, 255, 0.08)' }}
+                            />
+                          )}
+                          {inGenerated && !isHighlightTargetCell && (
+                            <div
+                              className="logitlens-heatmap-overlay logitlens-heatmap-overlay-generated absolute inset-0 pointer-events-none"
+                              style={{
+                                boxShadow: `inset 0 0 0 ${Math.max(2, 2 * effectiveZoom)}px rgba(136, 68, 255, 0.55)`,
+                              }}
+                            />
+                          )}
+                          {isHighlightTargetCell && (
+                            <div
+                              className="logitlens-heatmap-overlay logitlens-heatmap-overlay-highlight absolute inset-0 pointer-events-none"
+                              style={{
+                                boxShadow: `inset 0 0 0 ${Math.max(3, 3 * effectiveZoom)}px ${THEME.primary}`,
+                              }}
                             />
                           )}
                         </div>
@@ -547,12 +825,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
 
       {/* Token Generation overlay - covers entire component */}
       <AnimatePresence>
-        {(() => {
-          // #region agent log
-          if (typeof fetch !== 'undefined') { fetch('http://127.0.0.1:7244/ingest/fc915240-872e-4c1a-aef6-bf81d338a109',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LogitLensGrid.tsx:gen-panel',message:'Generation panel visibility',data:{showGeneration,isValidSelection:!!isValidSelection,selectedCell:selectedCell??null,filteredLayerAtCol:selectedCell!=null?filteredLayerIndices[selectedCell.col]:null,filteredTokenAtRow:selectedCell!=null?filteredTokenIndices[selectedCell.row]:null},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{}); }
-          // #endregion
-          return showGeneration && isValidSelection && selectedCell;
-        })() && (
+        {showGeneration && isValidSelection && selectedCell && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -620,6 +893,25 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {tooltipFor && tooltipState && (() => {
+        const node = tooltipFor(tooltipState.target);
+        if (!node) return null;
+        return (
+          <div
+            className="logitlens-tooltip pointer-events-none"
+            style={{
+              position: 'absolute',
+              left: tooltipState.x + 12,
+              top: tooltipState.y + 12,
+              zIndex: 60,
+              maxWidth: 320,
+            }}
+          >
+            {node}
+          </div>
+        );
+      })()}
     </div>
   );
 }

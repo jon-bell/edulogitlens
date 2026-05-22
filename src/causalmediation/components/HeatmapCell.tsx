@@ -19,6 +19,12 @@ interface HeatmapCellProps {
   width?: number;
   height?: number;
   fontSize?: number;
+  // When a cell is selected somewhere in this grid, every cell that is NOT
+  // in the row, column, or causal cone gets dimmed so the highlighted region
+  // pops. The actual row/column/cone tints are painted at GRID level (in
+  // HeatmapGrid) so they show through the gutters between cells; cells keep
+  // their probability backgrounds intact.
+  isOutsideCrosshair?: boolean;
 }
 
 function parseHex(hex: string): { r: number; g: number; b: number } {
@@ -59,6 +65,7 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   width = 72,
   height = 48,
   fontSize = 12,
+  isOutsideCrosshair = false,
 }) => {
   const [{ isDragging }, drag] = useDrag(
     () => ({
@@ -133,6 +140,16 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
         >
           {predictedToken}
         </span>
+
+        {/* Dim cells outside the row/column/cone so the highlighted region
+            pops. The actual region tints are painted at GRID level and
+            show through the gutters between cells. */}
+        {isOutsideCrosshair && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{ backgroundColor: 'rgba(255, 255, 255, 0.65)' }}
+          />
+        )}
       </motion.div>
     </div>
   );

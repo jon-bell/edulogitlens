@@ -8,8 +8,10 @@ import { VerticalFlowArrow } from './VerticalFlowArrow';
 
 const BASE_CELL_WIDTH = 72;
 const BASE_CELL_HEIGHT = 48;
-const BASE_HORIZ_ARROW_WIDTH = 28;
-const BASE_VERT_ARROW_HEIGHT = 16;
+// Tighter than the original arrow gutters (28 / 16): keep a little negative
+// space between cells for the chevron, but pack the grid noticeably denser.
+const BASE_HORIZ_ARROW_WIDTH = 12;
+const BASE_VERT_ARROW_HEIGHT = 6;
 const BASE_TOKEN_COL_WIDTH = 80;
 const BASE_LABEL_FONT = 14;
 const BASE_CELL_FONT = 12;
@@ -30,6 +32,13 @@ interface HeatmapGridProps {
   onHighlightRefChange?: (ref: HTMLElement | null) => void;
   showSidebar?: boolean;
   sidebarContent?: React.ReactNode;
+  // Synced scrolling: when scrollState is provided the grid follows it
+  // (controlled); the grid also reports its own scroll via onScroll.
+  onScroll?: (state: { scrollLeft: number; scrollTop: number }) => void;
+  scrollState?: { scrollLeft: number; scrollTop: number } | null;
+  // When false, cells in this grid cannot be dragged (useful when single-prompt
+  // mode hides the target and there is nothing to drop on).
+  isSourceDraggable?: boolean;
 }
 
 export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
@@ -48,6 +57,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   onHighlightRefChange,
   showSidebar = false,
   sidebarContent,
+  onScroll,
+  scrollState,
+  isSourceDraggable = true,
 }) => {
   const scale = zoom / 100;
   const cellWidth = BASE_CELL_WIDTH * scale;
@@ -61,11 +73,32 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
   const [scrolledX, setScrolledX] = React.useState(false);
   const [scrolledY, setScrolledY] = React.useState(false);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  // Suppress re-emitting onScroll when we apply a controlled scrollState.
+  const ignoreNextScrollRef = React.useRef(false);
+  const isScrollControlled = scrollState !== undefined && scrollState !== null;
+
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollLeft } = e.currentTarget;
     setScrolledY(scrollTop > 0);
     setScrolledX(scrollLeft > 0);
+    if (ignoreNextScrollRef.current) {
+      ignoreNextScrollRef.current = false;
+      return;
+    }
+    onScroll?.({ scrollLeft, scrollTop });
   };
+
+  React.useEffect(() => {
+    if (!isScrollControlled || !scrollState) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollLeft === scrollState.scrollLeft && el.scrollTop === scrollState.scrollTop)
+      return;
+    ignoreNextScrollRef.current = true;
+    el.scrollLeft = scrollState.scrollLeft;
+    el.scrollTop = scrollState.scrollTop;
+  }, [isScrollControlled, scrollState?.scrollLeft, scrollState?.scrollTop, scrollState]);
 
   const scrolledBg = 'rgba(255,255,255,0.9)';
   // Solid neutral color for the continuous left-axis bar behind token labels.
@@ -103,6 +136,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   const allLayers = prompt.data.layers;
   const allTokens = prompt.data.tokens;
 
+  // Hide a leading beginning-of-sequence marker (Llama: <|begin_of_text|>,
+  // Llama-2/Mistral: <s>, BERT-style: [CLS]). Crucially we only drop it from
+  // the *displayed* rows — displayTokenIndices keeps absolute indices, so the
+  // tokenPosition handed to drag/drop interventions stays correct.
+  const hideFirstToken =
+    allTokens.length > 1 && /^<\|.+\|>$|^<s>$|^\[CLS\]$/.test(allTokens[0]);
+
   const displayLayerIndices = allLayers
     .map((_, idx) => idx)
     .filter((idx) => idx % layerStep === 0 || idx === allLayers.length - 1);
@@ -110,7 +150,8 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
   const displayTokenIndices = allTokens
     .map((_, idx) => idx)
-    .filter((idx) => idx % tokenStep === 0 || idx === allTokens.length - 1);
+    .filter((idx) => idx % tokenStep === 0 || idx === allTokens.length - 1)
+    .filter((idx) => !(hideFirstToken && idx === 0));
   const displayTokens = displayTokenIndices.map((i) => allTokens[i]);
 
   const isInterventionCell = (tokenPos: number, layerIdx: number): boolean => {
@@ -163,11 +204,138 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
           </div>
 
           <div
+            ref={scrollRef}
             className="overflow-auto px-4 pb-4 w-full"
-            style={{ maxHeight: '60vh', position: 'relative' }}
+            style={{
+              maxHeight: '60vh',
+              position: 'relative',
+              scrollBehavior: isScrollControlled ? 'auto' : undefined,
+            }}
             onScroll={handleScroll}
           >
-            <div className="inline-block min-w-full pt-4">
+            <div
+              className="inline-block min-w-full pt-4"
+              // `isolation: isolate` creates a new stacking context so the
+              // z-index:-1 overlay children below stay BEHIND the cells but
+              // do not escape upward through the white card background.
+              style={{ position: 'relative', isolation: 'isolate' }}
+            >
+              {(() => {
+                // Grid-level highlight overlays. Painted BEHIND the cells so
+                // they only show through the gutters/empty space around them
+                // — the cells' opaque probability backgrounds cover the tint
+                // where they sit. Layered in order: cone (largest), then
+                // column and row bands. Cells must have z-index >= 1 (set on
+                // their wrapper below) to sit above these.
+                const selHere =
+                  selectedCell?.promptId === prompt.id ? selectedCell : null;
+                if (!selHere) return null;
+                const selRowDispIdx = displayTokenIndices.indexOf(selHere.tokenPosition);
+                const selColDispIdx = displayLayerIndices.indexOf(allLayers.indexOf(selHere.layer));
+                if (selRowDispIdx < 0 || selColDispIdx < 0) return null;
+
+                // Geometry of the inline-block content. pt-4 (= 16px) is the
+                // top padding; axis title row + sticky layer-number row sit
+                // above the cells.
+                const axisTitleH = axisTitleFontSize * 1.2 + 4; // text + mb-1
+                const stickyHeaderH = Math.max(24, cellHeight * 0.6) + 8; // + mb-2
+                const preRowsH = 16 + axisTitleH + stickyHeaderH;
+                const rowBlockH = cellHeight + 8 + vertArrowHeight + 8;
+                const halfGutter = (8 + vertArrowHeight + 8) / 2;
+
+                // Cell-row top for display index d.
+                const cellRowTop = (d: number) => preRowsH + d * rowBlockH;
+                // Cell-column left for display index j.
+                const cellColLeft = (j: number) =>
+                  tokenColWidth + j * (cellWidth + horizArrowWidth);
+
+                // Cone rectangle: top-left of grid down to bottom-right of
+                // selected cell.
+                const coneLeft = tokenColWidth;
+                const coneTop = preRowsH;
+                const coneWidth =
+                  (selColDispIdx + 1) * (cellWidth + horizArrowWidth) - horizArrowWidth;
+                const coneHeight = cellRowTop(selRowDispIdx) + cellHeight - preRowsH;
+
+                // Column band spans every row at the selected column.
+                const colLeft = cellColLeft(selColDispIdx);
+                const colTop = preRowsH;
+                const totalRowsH =
+                  (displayTokens.length - 1) * rowBlockH + cellHeight; // no trailing gutter on last row
+                const colHeight = totalRowsH;
+
+                // Row band spans every column at the selected row, with the
+                // vertical-arrow gutters above/below split 50/50 between
+                // adjacent rows.
+                const rowTop = cellRowTop(selRowDispIdx) - (selRowDispIdx > 0 ? halfGutter : 0);
+                const rowHeight =
+                  cellHeight +
+                  (selRowDispIdx > 0 ? halfGutter : 0) +
+                  (selRowDispIdx < displayTokens.length - 1 ? halfGutter : 0);
+                const rowLeft = tokenColWidth;
+                const totalColsW =
+                  displayLayers.length * cellWidth + (displayLayers.length - 1) * horizArrowWidth;
+
+                const hl = (() => {
+                  const c = prompt.color.replace('#', '');
+                  const full = c.length === 3 ? c.split('').map((x) => x + x).join('') : c;
+                  return {
+                    r: parseInt(full.slice(0, 2), 16),
+                    g: parseInt(full.slice(2, 4), 16),
+                    b: parseInt(full.slice(4, 6), 16),
+                  };
+                })();
+                const tintWeak = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;    // cone
+                const tintColumn = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;  // column band
+                const tintRow = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;     // row band
+
+                const overlayBase: React.CSSProperties = {
+                  position: 'absolute',
+                  pointerEvents: 'none',
+                  // z-index -1 keeps the overlays below the parent's static-
+                  // flow children (cells, gutters, chevrons) while still being
+                  // visible because the parent has no background fill.
+                  zIndex: -1,
+                };
+
+                return (
+                  <>
+                    {/* Cone underlay (cyan, debug). */}
+                    <div
+                      style={{
+                        ...overlayBase,
+                        left: coneLeft,
+                        top: coneTop,
+                        width: coneWidth,
+                        height: coneHeight,
+                        backgroundColor: tintWeak,
+                      }}
+                    />
+                    {/* Column band (magenta, debug). */}
+                    <div
+                      style={{
+                        ...overlayBase,
+                        left: colLeft,
+                        top: colTop,
+                        width: cellWidth,
+                        height: colHeight,
+                        backgroundColor: tintColumn,
+                      }}
+                    />
+                    {/* Row band (yellow, debug). */}
+                    <div
+                      style={{
+                        ...overlayBase,
+                        left: rowLeft,
+                        top: rowTop,
+                        width: totalColsW,
+                        height: rowHeight,
+                        backgroundColor: tintRow,
+                      }}
+                    />
+                  </>
+                );
+              })()}
               {/* X-axis title (top) — scrolls with content, not sticky */}
               <div className="flex items-center mb-1">
                 <div className="shrink-0" style={{ width: tokenColWidth }} />
@@ -274,6 +442,27 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         const isIntervention = isInterventionCell(tokenPos, layerIdx);
                         const animationDelay = getAnimationDelay(tokenPos, layerIdx);
 
+                        // Crosshair + causal cone (only for the grid that
+                        // owns the selected cell):
+                        //   * column = this layer's parallel output
+                        //   * row    = this token's depth trajectory
+                        //   * cone   = strictly earlier layers, equal-or-
+                        //              earlier positions: the cells whose
+                        //              outputs were actually available to
+                        //              compute the selected cell under the
+                        //              causal mask.
+                        // Cells outside ALL three get dimmed.
+                        const selHere =
+                          selectedCell?.promptId === prompt.id ? selectedCell : null;
+                        const inColumn = !!selHere && layerValue === selHere.layer;
+                        const inRow = !!selHere && tokenPos === selHere.tokenPosition;
+                        const inCone =
+                          !!selHere &&
+                          layerValue < selHere.layer &&
+                          tokenPos <= selHere.tokenPosition;
+                        const isOutsideCrosshair =
+                          !!selHere && !inColumn && !inRow && !inCone;
+
                         const nextLayerIdx =
                           displayColIdx < displayLayers.length - 1
                             ? displayLayerIndices[displayColIdx + 1]
@@ -314,6 +503,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
+                                  isOutsideCrosshair={isOutsideCrosshair}
                                 />
                               ) : (
                                 <HeatmapCell
@@ -323,7 +513,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   probability={cell.probability}
                                   baseColor={baseColor}
                                   promptId={prompt.id}
-                                  isDraggable={!isDropTarget && !isResult}
+                                  isDraggable={!isDropTarget && !isResult && isSourceDraggable}
                                   isSelected={isSelected}
                                   isHighlighted={isHighlight}
                                   isIntervention={isIntervention}
@@ -333,6 +523,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
+                                  isOutsideCrosshair={isOutsideCrosshair}
                                 />
                               )}
                             </div>
@@ -551,6 +742,7 @@ interface DropTargetCellProps {
   width: number;
   height: number;
   fontSize: number;
+  isOutsideCrosshair?: boolean;
 }
 
 const DropTargetCell: React.FC<DropTargetCellProps> = ({
@@ -569,6 +761,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
   width,
   height,
   fontSize,
+  isOutsideCrosshair,
 }) => {
   const [{ isOver, canDrop }, drop] = useDrop(
     () => ({
@@ -612,6 +805,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           width={width}
           height={height}
           fontSize={fontSize}
+          isOutsideCrosshair={isOutsideCrosshair}
         />
       </motion.div>
     </div>

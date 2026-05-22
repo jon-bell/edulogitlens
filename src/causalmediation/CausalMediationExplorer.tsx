@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { HeatmapGrid } from './components/HeatmapGrid';
@@ -50,6 +50,11 @@ export function CausalMediationExplorer({
     [sourceData, sourcePromptText],
   );
 
+  // Single-prompt mode: when the target text is blank, hide the target grid
+  // and the entire intervention flow (drag/drop, curved arrow, result panel).
+  // CM Intro degrades gracefully into a lens viewer for just the source.
+  const isSinglePromptMode = !targetPromptText || targetPromptText.trim().length === 0;
+
   const targetPrompt = useMemo<PromptInput>(
     () => ({
       id: 'target',
@@ -80,6 +85,89 @@ export function CausalMediationExplorer({
   const [zoom, setZoom] = useState(100);
   const [tokenStep, setTokenStep] = useState(1);
   const [layerStep, setLayerStep] = useState(1);
+
+  // Synced scrolling between the two heatmaps (default on). Both grids report
+  // their scroll into this shared state and follow it.
+  const [syncScroll, setSyncScroll] = useState(true);
+  const [scrollState, setScrollState] = useState<{ scrollLeft: number; scrollTop: number } | null>(
+    null,
+  );
+
+  // Auto-fit: when on (default), measure the wrapper holding the two grids and
+  // derive shared token/layer steps so both grids fit without scrolling. The
+  // toolbar's step inputs disable it (manual override).
+  const [autoFit, setAutoFit] = useState(true);
+  const [gridsSize, setGridsSize] = useState<{ width: number; height: number } | null>(null);
+  const gridsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = gridsRef.current;
+    if (!el) return;
+    const update = () => setGridsSize({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Cell footprint constants mirror HeatmapGrid's BASE_* values. The two grids
+  // sit side by side, so each gets ~half the wrapper width (minus the inter-grid
+  // gap). Compute from the LARGER of the two prompts so both stay aligned.
+  const autoStep = useMemo(() => {
+    if (!gridsSize) return { tokenStep: 1, layerStep: 1 };
+    const numTokens = Math.max(
+      sourcePrompt.data.tokens.length,
+      targetPrompt.data.tokens.length,
+    );
+    const numLayers = Math.max(
+      sourcePrompt.data.layers.length,
+      targetPrompt.data.layers.length,
+    );
+    if (numTokens === 0 || numLayers === 0) return { tokenStep: 1, layerStep: 1 };
+
+    const colFootprint = 72 + 28; // BASE_CELL_WIDTH + BASE_HORIZ_ARROW_WIDTH
+    const rowFootprint = 48 + 16; // BASE_CELL_HEIGHT + BASE_VERT_ARROW_HEIGHT
+    const tokenColWidth = 80; // BASE_TOKEN_COL_WIDTH
+    const interGridGap = 24; // gap-1.5rem between the two grids
+    const padding = 40; // card padding + axis/legend rows
+
+    const perGridWidth = (gridsSize.width - interGridGap) / 2;
+    const layersThatFit = Math.max(
+      1,
+      Math.floor((perGridWidth - tokenColWidth - padding) / colFootprint),
+    );
+    const tokensThatFit = Math.max(
+      1,
+      Math.floor((gridsSize.height - padding) / rowFootprint),
+    );
+
+    return {
+      layerStep: Math.max(1, Math.ceil(numLayers / layersThatFit)),
+      tokenStep: Math.max(1, Math.ceil(numTokens / tokensThatFit)),
+    };
+  }, [
+    gridsSize,
+    sourcePrompt.data.tokens.length,
+    sourcePrompt.data.layers.length,
+    targetPrompt.data.tokens.length,
+    targetPrompt.data.layers.length,
+  ]);
+
+  // While auto-fit is on, drive the shared steps from the computed values.
+  useEffect(() => {
+    if (!autoFit) return;
+    setTokenStep(autoStep.tokenStep);
+    setLayerStep(autoStep.layerStep);
+  }, [autoFit, autoStep.tokenStep, autoStep.layerStep]);
+
+  const handleTokenStepChange = (step: number) => {
+    setAutoFit(false);
+    setTokenStep(step);
+  };
+  const handleLayerStepChange = (step: number) => {
+    setAutoFit(false);
+    setLayerStep(step);
+  };
 
   const countVisible = (total: number, step: number) => {
     let n = 0;
@@ -239,18 +327,23 @@ export function CausalMediationExplorer({
               zoom={zoom}
               onZoomChange={setZoom}
               tokenStep={tokenStep}
-              onTokenStepChange={setTokenStep}
+              onTokenStepChange={handleTokenStepChange}
               layerStep={layerStep}
-              onLayerStepChange={setLayerStep}
+              onLayerStepChange={handleLayerStepChange}
               summary={toolbarSummary}
+              syncScroll={syncScroll}
+              onSyncScrollChange={setSyncScroll}
             />
           </div>
 
-          {/* Side-by-side prompts */}
+          {/* Side-by-side prompts (single column when in single-prompt mode). */}
           <div
+            ref={gridsRef}
             style={{
               display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+              gridTemplateColumns: isSinglePromptMode
+                ? 'minmax(0, 1fr)'
+                : 'minmax(0, 1fr) minmax(0, 1fr)',
               gap: '1.5rem',
             }}
           >
@@ -273,9 +366,13 @@ export function CausalMediationExplorer({
                   handleCellClick(sourcePrompt.id, tokenPos, layer)
                 }
                 onHighlightRefChange={setSourceHighlightRef}
+                onScroll={syncScroll && !isSinglePromptMode ? setScrollState : undefined}
+                scrollState={syncScroll && !isSinglePromptMode ? scrollState : undefined}
+                isSourceDraggable={!isSinglePromptMode}
               />
             </div>
 
+            {!isSinglePromptMode && (
             <div className="min-w-0 w-full">
               <HeatmapGrid
                 prompt={targetPrompt}
@@ -297,8 +394,11 @@ export function CausalMediationExplorer({
                   handleCellClick(targetPrompt.id, tokenPos, layer)
                 }
                 onHighlightRefChange={setTargetHighlightRef}
+                onScroll={syncScroll ? setScrollState : undefined}
+                scrollState={syncScroll ? scrollState : undefined}
               />
             </div>
+            )}
           </div>
 
           {intervention && sourceHighlightRef && targetHighlightRef && (
@@ -454,7 +554,7 @@ export function CausalMediationExplorer({
             </motion.div>
           )}
 
-          {!resultPromptInput && !(isInterventionPending && intervention) && (
+          {!isSinglePromptMode && !resultPromptInput && !(isInterventionPending && intervention) && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -467,11 +567,30 @@ export function CausalMediationExplorer({
               </p>
             </motion.div>
           )}
+          {isSinglePromptMode && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center text-gray-500 py-3 border-2 border-dashed border-gray-300 rounded-xl bg-white/50"
+            >
+              <p className="text-sm">
+                Click any cell to view its top token predictions. Add a target
+                prompt above to enable drag-and-drop patching.
+              </p>
+            </motion.div>
+          )}
         </div>
 
         <TokenPredictionPanel
           selectedCell={selectedCell}
           onClose={() => setSelectedCell(null)}
+          highlightColor={
+            selectedCell?.promptId === targetPrompt.id
+              ? targetPrompt.color
+              : selectedCell?.promptId === 'result'
+                ? targetPrompt.color
+                : sourcePrompt.color
+          }
         />
       </div>
     </DndProvider>
