@@ -126,10 +126,27 @@ export function CausalMediationExplorer({
     if (numTokens === 0 || numLayers === 0) return { tokenStep: 1, layerStep: 1 };
 
     const colFootprint = 72 + 28; // BASE_CELL_WIDTH + BASE_HORIZ_ARROW_WIDTH
-    const rowFootprint = 48 + 16; // BASE_CELL_HEIGHT + BASE_VERT_ARROW_HEIGHT
+    // Per-row block matches HeatmapGrid's `rowBlockH` at zoom 100:
+    // BASE_CELL_HEIGHT(48) + top gap(8) + BASE_VERT_ARROW_HEIGHT(6) + bottom
+    // gap(8). The old value (48 + 16) undercounted each row by 6px, which
+    // accumulated into the final row overflowing the scroll container.
+    const rowFootprint = 48 + 8 + 6 + 8;
     const tokenColWidth = 80; // BASE_TOKEN_COL_WIDTH
     const interGridGap = 24; // gap-1.5rem between the two grids
-    const padding = 40; // card padding + axis/legend rows
+    const padding = 40; // horizontal reserve (token-col gutter + card padding)
+
+    // Vertical chrome inside gridsSize.height that is NOT cell rows, so the
+    // token-fit budget excludes it. gridsSize.height (gridsRef.clientHeight)
+    // spans each grid's scroll container (capped at 82vh) PLUS the probability
+    // legend, which sits inside gridsRef. The non-row chrome is, at zoom 100:
+    //   top:    pt-4 (16) + X-axis title (~19) + sticky layer header (~37) ≈ 72
+    //   bottom: layer-number row (~29) + bottom axis title (~23) + pb-4 (16) ≈ 68
+    //   legend: ~30 (below the scroll container, inside the card)
+    // The old code folded all of this into `padding = 40`, badly undercounting
+    // it — so auto-fit thought more rows fit than the 82vh container could show
+    // and clipped the final row (bug B1). Rounded up slightly for slack so the
+    // last row never clips at the cost of occasionally one fewer row.
+    const vChrome = 180;
 
     const perGridWidth = (gridsSize.width - interGridGap) / 2;
     const layersThatFit = Math.max(
@@ -138,7 +155,7 @@ export function CausalMediationExplorer({
     );
     const tokensThatFit = Math.max(
       1,
-      Math.floor((gridsSize.height - padding) / rowFootprint),
+      Math.floor((gridsSize.height - vChrome) / rowFootprint),
     );
 
     return {
