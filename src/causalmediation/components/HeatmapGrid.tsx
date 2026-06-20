@@ -136,13 +136,11 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   const allLayers = prompt.data.layers;
   const allTokens = prompt.data.tokens;
 
-  // Hide a leading beginning-of-sequence marker (Llama: <|begin_of_text|>,
-  // Llama-2/Mistral: <s>, BERT-style: [CLS]). Crucially we only drop it from
-  // the *displayed* rows — displayTokenIndices keeps absolute indices, so the
-  // tokenPosition handed to drag/drop interventions stays correct.
-  const hideFirstToken =
-    allTokens.length > 1 && /^<\|.+\|>$|^<s>$|^\[CLS\]$/.test(allTokens[0]);
-
+  // Show all input tokens — including any leading BOS marker
+  // (<|begin_of_text|> / <s> / [CLS]) — so the CM heatmap's rows match the
+  // standard logit-lens widget (LogitLensGrid / nnsightful LogitLensWidget),
+  // which render the full input. displayTokenIndices keeps absolute indices so
+  // the tokenPosition handed to drag/drop interventions stays correct.
   const displayLayerIndices = allLayers
     .map((_, idx) => idx)
     .filter((idx) => idx % layerStep === 0 || idx === allLayers.length - 1);
@@ -150,8 +148,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
   const displayTokenIndices = allTokens
     .map((_, idx) => idx)
-    .filter((idx) => idx % tokenStep === 0 || idx === allTokens.length - 1)
-    .filter((idx) => !(hideFirstToken && idx === 0));
+    .filter((idx) => idx % tokenStep === 0 || idx === allTokens.length - 1);
   const displayTokens = displayTokenIndices.map((i) => allTokens[i]);
 
   const isInterventionCell = (tokenPos: number, layerIdx: number): boolean => {
