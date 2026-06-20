@@ -169,12 +169,24 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     );
   };
 
+  // The model's final next-token prediction = top-1 token at the last position,
+  // final layer. Cells anywhere in the grid whose own top-1 equals it are tinted
+  // orange (ramped by probability) instead of the base color, so you can see
+  // where in the network the final answer emerges — mirrors the nnsightful
+  // LogitLensWidget.
+  const FINAL_PRED_HEX = '#cc6622';
+  const finalPredToken =
+    prompt.data.data[prompt.data.tokens.length - 1]?.[prompt.data.layers.length - 1]?.token ?? '';
+
   const getBaseColor = (tokenPos: number, layerIdx: number): string => {
     if (isInterventionCell(tokenPos, layerIdx)) {
       return interventionCell?.sourceColor || prompt.color;
     }
     if (isCellAffected(tokenPos, layerIdx)) {
       return blendColor || prompt.color;
+    }
+    if (finalPredToken !== '' && prompt.data.data[tokenPos]?.[layerIdx]?.token === finalPredToken) {
+      return FINAL_PRED_HEX;
     }
     return prompt.color;
   };
