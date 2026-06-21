@@ -433,7 +433,18 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         }}
                         title={tokenText}
                       >
-                        {tokenText}
+                        {tokenText.trim() === '' ? (
+                          // Whitespace-only tokens (e.g. a trailing " ") would
+                          // render invisibly, making the row look unlabeled /
+                          // "missing". Show a muted middle-dot per whitespace
+                          // char so the row is clearly visible. Raw token stays
+                          // in the title for hover.
+                          <span className="text-gray-400">
+                            {'·'.repeat(tokenText.length || 1)}
+                          </span>
+                        ) : (
+                          tokenText
+                        )}
                       </div>
 
                       {displayLayers.map((layerValue, displayColIdx) => {
