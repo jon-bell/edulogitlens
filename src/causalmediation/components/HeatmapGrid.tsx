@@ -136,19 +136,45 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   const allLayers = prompt.data.layers;
   const allTokens = prompt.data.tokens;
 
+  // Auto-fit downsamples rows/cols by tokenStep/layerStep to fit the viewport.
+  // Hidden tokens/layers between two shown ones are revealed by clicking the
+  // "⋯N" expander rendered in the chevron gutter between them; the indices a
+  // user expands are kept here and always rendered.
+  const [expandedTokens, setExpandedTokens] = React.useState<Set<number>>(new Set());
+  const [expandedLayers, setExpandedLayers] = React.useState<Set<number>>(new Set());
+
+  const expandTokenGap = (loIdx: number, hiIdx: number) =>
+    setExpandedTokens((prev) => {
+      const next = new Set(prev);
+      for (let i = loIdx + 1; i < hiIdx; i++) next.add(i);
+      return next;
+    });
+  const expandLayerGap = (loIdx: number, hiIdx: number) =>
+    setExpandedLayers((prev) => {
+      const next = new Set(prev);
+      for (let i = loIdx + 1; i < hiIdx; i++) next.add(i);
+      return next;
+    });
+
   // Show all input tokens — including any leading BOS marker
   // (<|begin_of_text|> / <s> / [CLS]) — so the CM heatmap's rows match the
   // standard logit-lens widget (LogitLensGrid / nnsightful LogitLensWidget),
   // which render the full input. displayTokenIndices keeps absolute indices so
-  // the tokenPosition handed to drag/drop interventions stays correct.
+  // the tokenPosition handed to drag/drop interventions stays correct. The
+  // last token/layer is ALWAYS shown (the model's final prediction / output
+  // layer), plus anything the user has expanded.
   const displayLayerIndices = allLayers
     .map((_, idx) => idx)
-    .filter((idx) => idx % layerStep === 0 || idx === allLayers.length - 1);
+    .filter(
+      (idx) => idx % layerStep === 0 || idx === allLayers.length - 1 || expandedLayers.has(idx),
+    );
   const displayLayers = displayLayerIndices.map((i) => allLayers[i]);
 
   const displayTokenIndices = allTokens
     .map((_, idx) => idx)
-    .filter((idx) => idx % tokenStep === 0 || idx === allTokens.length - 1);
+    .filter(
+      (idx) => idx % tokenStep === 0 || idx === allTokens.length - 1 || expandedTokens.has(idx),
+    );
   const displayTokens = displayTokenIndices.map((i) => allTokens[i]);
 
   const isInterventionCell = (tokenPos: number, layerIdx: number): boolean => {
@@ -418,6 +444,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 const nextTokenPos = !isLastDisplayRow
                   ? displayTokenIndices[displayRowIdx + 1]
                   : null;
+                // Hidden token rows collapsed between this row and the next.
+                const hiddenRows =
+                  nextTokenPos != null ? nextTokenPos - tokenPos - 1 : 0;
                 return (
                   <div key={tokenPos}>
                     <div className="flex items-center mb-2">
@@ -551,26 +580,104 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                               )}
                             </div>
 
-                            {displayColIdx < displayLayers.length - 1 && !nextIsIntervention && (
-                              <div
-                                style={{
-                                  width: horizArrowWidth,
-                                  flexShrink: 0,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                }}
-                              >
-                                <FlowArrow color={baseColor} opacity={0.9} />
-                              </div>
-                            )}
-                            {displayColIdx < displayLayers.length - 1 && nextIsIntervention && (
-                              <div style={{ width: horizArrowWidth, flexShrink: 0 }} />
-                            )}
+                            {(() => {
+                              if (displayColIdx >= displayLayers.length - 1) return null;
+                              const hiddenLayers =
+                                displayLayerIndices[displayColIdx + 1] - layerIdx - 1;
+                              // Collapsed-cols expander: clickable "⋮" in the
+                              // gutter when auto-fit hid layers between this col
+                              // and the next. Clicking reveals those layers.
+                              if (hiddenLayers > 0) {
+                                return (
+                                  <button
+                                    type="button"
+                                    data-testid="layer-gap-expander"
+                                    title={`${hiddenLayers} hidden layer${hiddenLayers > 1 ? 's' : ''} — click to expand`}
+                                    onClick={() =>
+                                      expandLayerGap(layerIdx, displayLayerIndices[displayColIdx + 1])
+                                    }
+                                    className="shrink-0 flex items-center justify-center text-gray-300 hover:text-gray-700"
+                                    style={{
+                                      width: horizArrowWidth,
+                                      height: cellHeight,
+                                      fontSize: 11,
+                                      lineHeight: 1,
+                                      cursor: 'pointer',
+                                      background: 'none',
+                                      border: 'none',
+                                      padding: 0,
+                                    }}
+                                  >
+                                    ⋮
+                                  </button>
+                                );
+                              }
+                              if (nextIsIntervention) {
+                                return <div style={{ width: horizArrowWidth, flexShrink: 0 }} />;
+                              }
+                              return (
+                                <div
+                                  style={{
+                                    width: horizArrowWidth,
+                                    flexShrink: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                  }}
+                                >
+                                  <FlowArrow color={baseColor} opacity={0.9} />
+                                </div>
+                              );
+                            })()}
                           </div>
                         );
                       })}
                     </div>
+
+                    {/* Collapsed-rows expander: when auto-fit hid token rows
+                        between this row and the next, show a clickable "⋯N" in
+                        the gutter; clicking reveals those rows. */}
+                    {!isLastDisplayRow && hiddenRows > 0 && (
+                      // Compact collapsed-rows indicator: a thin clickable strip
+                      // (shorter than the normal chevron gutter) so downsampled
+                      // grids stay dense. Pulled up over the row's mb-2 so it
+                      // doesn't add height.
+                      <div
+                        className="flex items-center"
+                        style={{ height: 9, marginTop: -6, marginBottom: 1 }}
+                      >
+                        <button
+                          type="button"
+                          data-testid="token-gap-expander"
+                          title={`${hiddenRows} hidden token${hiddenRows > 1 ? 's' : ''} — click to expand`}
+                          onClick={() => expandTokenGap(tokenPos, nextTokenPos as number)}
+                          className="shrink-0 flex items-center justify-center gap-0.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                          style={{
+                            width: tokenColWidth,
+                            height: 9,
+                            fontSize: 9,
+                            position: 'sticky',
+                            left: 0,
+                            zIndex: 2,
+                            cursor: 'pointer',
+                            ...stickyLeftShadow,
+                          }}
+                        >
+                          <span style={{ lineHeight: 1 }}>⋯</span>
+                          <span style={{ lineHeight: 1 }}>{hiddenRows}</span>
+                        </button>
+                        {/* faint dashed rule across the grid width to signal the break */}
+                        <div
+                          aria-hidden="true"
+                          style={{
+                            flex: 1,
+                            height: 0,
+                            borderTop: '1px dashed #e5e7eb',
+                            pointerEvents: 'none',
+                          }}
+                        />
+                      </div>
+                    )}
 
                     {/* Vertical arrow gutter row: a narrow row of height vertArrowHeight
                         between adjacent token rows. Structure mirrors the token row:
@@ -578,7 +685,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         arrow container per layer, with horizArrowWidth spacers between.
                         Each arrow container centers the small arrow glyph. The row is
                         pointer-events: none since arrows are decorative. */}
-                    {!isLastDisplayRow && nextTokenPos != null && (
+                    {!isLastDisplayRow && nextTokenPos != null && hiddenRows === 0 && (
                       <div
                         className="flex items-center"
                         style={{
