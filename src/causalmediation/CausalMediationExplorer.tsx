@@ -148,7 +148,13 @@ export function CausalMediationExplorer({
     // last row never clips at the cost of occasionally one fewer row.
     const vChrome = 180;
 
-    const perGridWidth = (gridsSize.width - interGridGap) / 2;
+    // In single-prompt mode only ONE grid renders, so it gets the full wrapper
+    // width — don't halve it. Halving here was the bug that capped a lone grid
+    // at ~4 layers when ~11 would fit (the two-grid split was applied even with
+    // no target grid present).
+    const perGridWidth = isSinglePromptMode
+      ? gridsSize.width
+      : (gridsSize.width - interGridGap) / 2;
     const layersThatFit = Math.max(
       1,
       Math.floor((perGridWidth - tokenColWidth - padding) / colFootprint),
@@ -164,6 +170,7 @@ export function CausalMediationExplorer({
     };
   }, [
     gridsSize,
+    isSinglePromptMode,
     sourcePrompt.data.tokens.length,
     sourcePrompt.data.layers.length,
     targetPrompt.data.tokens.length,

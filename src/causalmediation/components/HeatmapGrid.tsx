@@ -156,6 +156,17 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
       return next;
     });
 
+  // When the step changes — via the toolbar or auto-fit recomputing — discard
+  // any manually-expanded gaps so the grid re-collapses to the new density.
+  // Each expansion set is tied to its own step so changing one doesn't reset
+  // the other.
+  React.useEffect(() => {
+    setExpandedTokens(new Set());
+  }, [tokenStep]);
+  React.useEffect(() => {
+    setExpandedLayers(new Set());
+  }, [layerStep]);
+
   // Show all input tokens — including any leading BOS marker
   // (<|begin_of_text|> / <s> / [CLS]) — so the CM heatmap's rows match the
   // standard logit-lens widget (LogitLensGrid / nnsightful LogitLensWidget),
@@ -588,6 +599,10 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                               // gutter when auto-fit hid layers between this col
                               // and the next. Clicking reveals those layers.
                               if (hiddenLayers > 0) {
+                                // Keep the flow chevron, but draw a vertical
+                                // dashed break-line behind it to signal the
+                                // collapsed layers. The whole gutter stays
+                                // clickable to reveal them.
                                 return (
                                   <button
                                     type="button"
@@ -596,19 +611,29 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                     onClick={() =>
                                       expandLayerGap(layerIdx, displayLayerIndices[displayColIdx + 1])
                                     }
-                                    className="shrink-0 flex items-center justify-center text-gray-300 hover:text-gray-700"
+                                    className="shrink-0 flex items-center justify-center hover:bg-gray-100/60 transition-colors"
                                     style={{
                                       width: horizArrowWidth,
                                       height: cellHeight,
-                                      fontSize: 11,
-                                      lineHeight: 1,
+                                      position: 'relative',
                                       cursor: 'pointer',
                                       background: 'none',
                                       border: 'none',
                                       padding: 0,
                                     }}
                                   >
-                                    ⋮
+                                    <div
+                                      aria-hidden="true"
+                                      style={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        bottom: 0,
+                                        left: '50%',
+                                        borderLeft: '1px dashed #cbd5e1',
+                                        pointerEvents: 'none',
+                                      }}
+                                    />
+                                    <FlowArrow color={baseColor} opacity={0.9} />
                                   </button>
                                 );
                               }
@@ -634,77 +659,77 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                       })}
                     </div>
 
-                    {/* Collapsed-rows expander: when auto-fit hid token rows
-                        between this row and the next, show a clickable "⋯N" in
-                        the gutter; clicking reveals those rows. */}
-                    {!isLastDisplayRow && hiddenRows > 0 && (
-                      // Compact collapsed-rows indicator: a thin clickable strip
-                      // (shorter than the normal chevron gutter) so downsampled
-                      // grids stay dense. Pulled up over the row's mb-2 so it
-                      // doesn't add height.
-                      <div
-                        className="flex items-center"
-                        style={{ height: 9, marginTop: -6, marginBottom: 1 }}
-                      >
-                        <button
-                          type="button"
-                          data-testid="token-gap-expander"
-                          title={`${hiddenRows} hidden token${hiddenRows > 1 ? 's' : ''} — click to expand`}
-                          onClick={() => expandTokenGap(tokenPos, nextTokenPos as number)}
-                          className="shrink-0 flex items-center justify-center gap-0.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-                          style={{
-                            width: tokenColWidth,
-                            height: 9,
-                            fontSize: 9,
-                            position: 'sticky',
-                            left: 0,
-                            zIndex: 2,
-                            cursor: 'pointer',
-                            ...stickyLeftShadow,
-                          }}
-                        >
-                          <span style={{ lineHeight: 1 }}>⋯</span>
-                          <span style={{ lineHeight: 1 }}>{hiddenRows}</span>
-                        </button>
-                        {/* faint dashed rule across the grid width to signal the break */}
-                        <div
-                          aria-hidden="true"
-                          style={{
-                            flex: 1,
-                            height: 0,
-                            borderTop: '1px dashed #e5e7eb',
-                            pointerEvents: 'none',
-                          }}
-                        />
-                      </div>
-                    )}
-
-                    {/* Vertical arrow gutter row: a narrow row of height vertArrowHeight
-                        between adjacent token rows. Structure mirrors the token row:
-                        sticky-left spacer of tokenColWidth, then one cellWidth-wide
-                        arrow container per layer, with horizArrowWidth spacers between.
-                        Each arrow container centers the small arrow glyph. The row is
-                        pointer-events: none since arrows are decorative. */}
-                    {!isLastDisplayRow && nextTokenPos != null && hiddenRows === 0 && (
+                    {/* Vertical arrow gutter row between adjacent token rows.
+                        Structure mirrors the token row: sticky-left column of
+                        tokenColWidth, then one cellWidth-wide arrow container per
+                        layer, with horizArrowWidth spacers between. The chevrons
+                        ALWAYS render. When auto-fit hid token rows in this gap
+                        (hiddenRows > 0) we additionally draw a dashed break-line
+                        behind the chevrons and put a clickable "... N (hidden)"
+                        label in the sticky-left column to reveal them. */}
+                    {!isLastDisplayRow && nextTokenPos != null && (
                       <div
                         className="flex items-center"
                         style={{
                           marginBottom: 8,
+                          position: 'relative',
+                          // Arrows are decorative; only the count button (when
+                          // collapsed) is interactive — it re-enables pointers.
                           pointerEvents: 'none',
                         }}
                       >
-                        {/* Left spacer matching sticky token-label column */}
+                        {/* Dashed break-line behind the chevrons, only when this
+                            gap hides rows. Spans from the token column to the end. */}
+                        {hiddenRows > 0 && (
+                          <div
+                            aria-hidden="true"
+                            style={{
+                              position: 'absolute',
+                              left: tokenColWidth,
+                              right: 0,
+                              top: '50%',
+                              borderTop: '1px dashed #cbd5e1',
+                              pointerEvents: 'none',
+                              zIndex: 0,
+                            }}
+                          />
+                        )}
+                        {/* Sticky-left column: a clickable count label when this
+                            gap is collapsed, otherwise an empty spacer. */}
                         <div
-                          className="shrink-0"
+                          className="shrink-0 flex items-center"
                           style={{
                             width: tokenColWidth,
                             height: vertArrowHeight,
                             position: 'sticky',
                             left: 0,
-                            zIndex: 1,
+                            zIndex: 2,
                             ...stickyLeftShadow,
                           }}
-                        />
+                        >
+                          {hiddenRows > 0 && (
+                            <button
+                              type="button"
+                              data-testid="token-gap-expander"
+                              title={`${hiddenRows} hidden token${hiddenRows > 1 ? 's' : ''} — click to expand`}
+                              onClick={() => expandTokenGap(tokenPos, nextTokenPos as number)}
+                              className="text-gray-400 hover:text-gray-700 rounded transition-colors"
+                              style={{
+                                fontSize: 9,
+                                lineHeight: 1,
+                                whiteSpace: 'nowrap',
+                                paddingLeft: 4,
+                                paddingRight: 4,
+                                cursor: 'pointer',
+                                background: 'none',
+                                border: 'none',
+                                pointerEvents: 'auto',
+                              }}
+                            >
+                              {`... ${hiddenRows} (hidden)`}
+                            </button>
+                          )}
+                        </div>
                         {displayLayers.map((layerValue, displayColIdx) => {
                           const layerIdx = displayLayerIndices[displayColIdx];
                           const suppressIncomingVertical =
@@ -722,6 +747,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                             <div
                               key={`varrow-${tokenPos}-${layerValue}`}
                               className="flex items-center"
+                              // Sit above the dashed break-line (zIndex 0) so the
+                              // chevrons render over it, not under it.
+                              style={{ position: 'relative', zIndex: 1 }}
                             >
                               <div
                                 style={{
