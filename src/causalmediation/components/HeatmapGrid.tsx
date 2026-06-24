@@ -200,9 +200,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     if (!interventionCell || !isResult) return false;
     const intLayerIdx = allLayers.indexOf(interventionCell.layer);
     const intTokenPos = interventionCell.tokenPosition;
+    // A patch at layer L only shows up at layer L+1 and deeper: at the patch
+    // token (carried forward through the residual stream) and at later tokens
+    // (read in via attention at the next layer). Cells in the SAME layer L are
+    // computed independently of the patch, so they keep their base color.
     return (
       (tokenPos === intTokenPos && layerIdx > intLayerIdx) ||
-      (tokenPos > intTokenPos && layerIdx >= intLayerIdx)
+      (tokenPos > intTokenPos && layerIdx > intLayerIdx)
     );
   };
 
@@ -283,6 +287,16 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 const selColDispIdx = displayLayerIndices.indexOf(allLayers.indexOf(selHere.layer));
                 if (selRowDispIdx < 0 || selColDispIdx < 0) return null;
 
+                // When the selected cell is downstream of the patch (tainted),
+                // tint the highlight bands purple (the blend color) to match the
+                // cell coloring, instead of the prompt color. blendColor is only
+                // set on the result grid, where isCellAffected can be true.
+                const selTainted = isCellAffected(
+                  selHere.tokenPosition,
+                  allLayers.indexOf(selHere.layer),
+                );
+                const tintBase = selTainted && blendColor ? blendColor : prompt.color;
+
                 // Geometry of the inline-block content. pt-4 (= 16px) is the
                 // top padding; axis title row + sticky layer-number row sit
                 // above the cells.
@@ -326,7 +340,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   displayLayers.length * cellWidth + (displayLayers.length - 1) * horizArrowWidth;
 
                 const hl = (() => {
-                  const c = prompt.color.replace('#', '');
+                  const c = tintBase.replace('#', '');
                   const full = c.length === 3 ? c.split('').map((x) => x + x).join('') : c;
                   return {
                     r: parseInt(full.slice(0, 2), 16),
@@ -737,6 +751,15 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                             interventionCell != null &&
                             nextTokenPos === interventionCell.tokenPosition &&
                             layerValue === interventionCell.layer;
+                          // Also drop the chevron LEAVING the patch target
+                          // downward: a patch doesn't propagate to the next
+                          // token within the same layer (that happens one layer
+                          // deeper), so a same-layer down arrow is misleading.
+                          const suppressOutgoingVertical =
+                            isResult &&
+                            interventionCell != null &&
+                            tokenPos === interventionCell.tokenPosition &&
+                            layerValue === interventionCell.layer;
                           // Color by origin cell, mirroring the horizontal arrow.
                           // Coloring by destination made arrows from unaffected
                           // (pink) cells into mixed (purple) cells render purple.
@@ -760,7 +783,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   justifyContent: 'center',
                                 }}
                               >
-                                {suppressIncomingVertical ? (
+                                {suppressIncomingVertical || suppressOutgoingVertical ? (
                                   <div
                                     style={{
                                       width: cellWidth,
@@ -873,6 +896,32 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
               }}
             />
             <span style={{ fontSize: 10, color: '#6b7280' }}>1.0</span>
+            {/* Key for the final-output-token tint (see FINAL_PRED_HEX): cells
+                whose top-1 equals the model's final next-token prediction are
+                tinted brown instead of the prompt color. */}
+            {finalPredToken !== '' && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  marginLeft: 12,
+                }}
+              >
+                <span
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: 2,
+                    backgroundColor: FINAL_PRED_HEX,
+                    border: '1px solid #e5e7eb',
+                  }}
+                />
+                <span style={{ fontSize: 11, color: '#374151' }}>
+                  Final output token
+                </span>
+              </span>
+            )}
           </div>
         </div>
 
