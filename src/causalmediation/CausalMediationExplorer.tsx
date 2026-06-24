@@ -28,6 +28,13 @@ interface CausalMediationExplorerProps {
   targetData?: LogitLensData;
   onIntervention?: (i: Intervention) => Promise<LogitLensData | null> | void;
   resultData?: LogitLensData | null;
+  // Controlled intervention: when provided, the parent owns the patch spec
+  // (e.g. a persisted/restored patch), so the cone + arrow + result grid redraw
+  // without a live drag. undefined = uncontrolled (the internal drag state drives).
+  intervention?: Intervention | null;
+  // Called when the user clicks "Reset Intervention". Lets a controlling parent
+  // drop its persisted spec; without it a controlled intervention would re-supply.
+  onResetIntervention?: () => void;
   isInterventionPending?: boolean;
 }
 
@@ -38,6 +45,8 @@ export function CausalMediationExplorer({
   targetData,
   onIntervention,
   resultData: controlledResultData,
+  intervention: controlledIntervention,
+  onResetIntervention,
   isInterventionPending = false,
 }: CausalMediationExplorerProps = {}) {
   const sourcePrompt = useMemo<PromptInput>(
@@ -65,7 +74,7 @@ export function CausalMediationExplorer({
     [targetData, targetPromptText],
   );
 
-  const [intervention, setIntervention] = useState<Intervention | null>(null);
+  const [internalIntervention, setInternalIntervention] = useState<Intervention | null>(null);
   const [internalResultData, setInternalResultData] = useState<LogitLensData | null>(null);
   const [selectedCell, setSelectedCell] = useState<SelectedCell | null>(null);
   const [resultSelectedCell, setResultSelectedCell] = useState<SelectedCell | null>(null);
@@ -80,6 +89,13 @@ export function CausalMediationExplorer({
   const resultData: LogitLensData | null = isResultControlled
     ? controlledResultData ?? null
     : internalResultData;
+
+  // Same controlled pattern for the intervention: a non-undefined prop is the
+  // source of truth (restored/revisited patch); undefined falls back to the
+  // internal drag state. A live drag sets the internal state first (instant),
+  // then the parent persists + re-supplies the identical spec via the prop.
+  const isInterventionControlled = controlledIntervention !== undefined;
+  const intervention = isInterventionControlled ? controlledIntervention : internalIntervention;
 
   // Shared toolbar state — both grids share zoom, tokenStep, layerStep.
   const [zoom, setZoom] = useState(100);
@@ -219,7 +235,7 @@ export function CausalMediationExplorer({
   ]);
 
   useEffect(() => {
-    setIntervention(null);
+    setInternalIntervention(null);
     setInternalResultData(null);
     setSelectedCell(null);
     setResultSelectedCell(null);
@@ -235,7 +251,7 @@ export function CausalMediationExplorer({
       targetTokenPosition: targetTokenPos,
     };
 
-    setIntervention(newIntervention);
+    setInternalIntervention(newIntervention);
 
     if (onIntervention) {
       // Controlled path: parent owns the real result.
@@ -265,9 +281,10 @@ export function CausalMediationExplorer({
   };
 
   const handleReset = () => {
-    setIntervention(null);
-    // Reset is UI-only: just clear internal state. Parent-controlled `resultData`
-    // is not touched here (parent can observe intervention via onIntervention if needed).
+    setInternalIntervention(null);
+    // Ask a controlling parent to drop its persisted spec too; otherwise the
+    // `intervention` prop would immediately re-supply the patch we just cleared.
+    onResetIntervention?.();
     setInternalResultData(null);
     setSelectedCell(null);
     setResultSelectedCell(null);
