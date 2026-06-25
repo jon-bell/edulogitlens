@@ -287,16 +287,6 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 const selColDispIdx = displayLayerIndices.indexOf(allLayers.indexOf(selHere.layer));
                 if (selRowDispIdx < 0 || selColDispIdx < 0) return null;
 
-                // When the selected cell is downstream of the patch (tainted),
-                // tint the highlight bands purple (the blend color) to match the
-                // cell coloring, instead of the prompt color. blendColor is only
-                // set on the result grid, where isCellAffected can be true.
-                const selTainted = isCellAffected(
-                  selHere.tokenPosition,
-                  allLayers.indexOf(selHere.layer),
-                );
-                const tintBase = selTainted && blendColor ? blendColor : prompt.color;
-
                 // Geometry of the inline-block content. pt-4 (= 16px) is the
                 // top padding; axis title row + sticky layer-number row sit
                 // above the cells.
@@ -340,7 +330,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   displayLayers.length * cellWidth + (displayLayers.length - 1) * horizArrowWidth;
 
                 const hl = (() => {
-                  const c = tintBase.replace('#', '');
+                  const c = prompt.color.replace('#', '');
                   const full = c.length === 3 ? c.split('').map((x) => x + x).join('') : c;
                   return {
                     r: parseInt(full.slice(0, 2), 16),
