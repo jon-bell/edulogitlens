@@ -14,6 +14,10 @@ interface HeatmapCellProps {
   isHighlighted?: boolean;
   onClick?: () => void;
   isIntervention?: boolean;
+  // Downstream of the patch: draws a purple border so a cell whose FILL is the
+  // brown final-token tint is still visibly marked as tainted.
+  isTainted?: boolean;
+  taintColor?: string;
   animationDelay?: number;
   highlightRef?: (ref: HTMLDivElement | null) => void;
   width?: number;
@@ -60,6 +64,8 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   isHighlighted = false,
   onClick,
   isIntervention = false,
+  isTainted = false,
+  taintColor = '#9333ea',
   animationDelay = 0,
   highlightRef,
   width = 72,
@@ -114,9 +120,11 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
           height,
           backgroundColor: bg,
           boxSizing: 'border-box',
-          border: isHighlighted
-            ? `2px solid ${baseColor}`
-            : `1px solid rgba(0,0,0,0.06)`,
+          border: isTainted
+            ? `2px solid ${taintColor}`
+            : isHighlighted
+              ? `2px solid ${baseColor}`
+              : `1px solid rgba(0,0,0,0.06)`,
           outline: isSelected ? `2px solid #facc15` : 'none',
           outlineOffset: isSelected ? 1 : 0,
         }}

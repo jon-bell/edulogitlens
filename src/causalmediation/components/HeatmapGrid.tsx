@@ -223,11 +223,15 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     if (isInterventionCell(tokenPos, layerIdx)) {
       return interventionCell?.sourceColor || prompt.color;
     }
-    if (isCellAffected(tokenPos, layerIdx)) {
-      return blendColor || prompt.color;
-    }
+    // The final-token tint wins over the affected (purple) FILL so the answer's
+    // emergence stays visible even inside the patch cone. Tainted cells that land
+    // here instead get a purple BORDER (see isTainted at the cell) so they're
+    // still marked as downstream of the patch.
     if (finalPredToken !== '' && prompt.data.data[tokenPos]?.[layerIdx]?.token === finalPredToken) {
       return FINAL_PRED_HEX;
+    }
+    if (isCellAffected(tokenPos, layerIdx)) {
+      return blendColor || prompt.color;
     }
     return prompt.color;
   };
@@ -507,6 +511,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
                         const baseColor = getBaseColor(tokenPos, layerIdx);
                         const isIntervention = isInterventionCell(tokenPos, layerIdx);
+                        // Downstream of the patch: gets a purple border so a
+                        // brown-filled (final-token) cell is still marked tainted.
+                        const isTainted = isCellAffected(tokenPos, layerIdx);
                         const animationDelay = getAnimationDelay(tokenPos, layerIdx);
 
                         // Crosshair + causal cone (only for the grid that
@@ -584,6 +591,8 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   isSelected={isSelected}
                                   isHighlighted={isHighlight}
                                   isIntervention={isIntervention}
+                                  isTainted={isTainted}
+                                  taintColor={blendColor}
                                   onClick={() => onCellClick?.(tokenPos, layerValue)}
                                   animationDelay={animationDelay}
                                   highlightRef={isHighlight ? onHighlightRefChange : undefined}
