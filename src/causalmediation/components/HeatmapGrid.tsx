@@ -333,18 +333,39 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 const totalColsW =
                   displayLayers.length * cellWidth + (displayLayers.length - 1) * horizArrowWidth;
 
-                const hl = (() => {
-                  const c = prompt.color.replace('#', '');
+                const toRgb = (hex: string) => {
+                  const c = hex.replace('#', '');
                   const full = c.length === 3 ? c.split('').map((x) => x + x).join('') : c;
                   return {
                     r: parseInt(full.slice(0, 2), 16),
                     g: parseInt(full.slice(2, 4), 16),
                     b: parseInt(full.slice(4, 6), 16),
                   };
-                })();
-                const tintWeak = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.18)`;    // cone
-                const tintColumn = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;  // column band
-                const tintRow = `rgba(${hl.r}, ${hl.g}, ${hl.b}, 0.35)`;     // row band
+                };
+                const pink = toRgb(prompt.color);
+                const purple = toRgb(blendColor || '#9333ea');
+                const rgba = (
+                  { r, g, b }: { r: number; g: number; b: number },
+                  a: number,
+                ) => `rgba(${r}, ${g}, ${b}, ${a})`;
+
+                // Affected-region anchor: cells strictly to the right of and
+                // at/below the intervention are "tainted" (the same rule as
+                // isCellAffected / the cell shading). On the result grid the
+                // highlight bands turn purple over that region and stay pink
+                // elsewhere; off the result grid affX/affY stay Infinity so the
+                // whole highlight is pink, unchanged.
+                let affX = Infinity;
+                let affY = Infinity;
+                if (isResult && interventionCell) {
+                  const intLayerIdx = allLayers.indexOf(interventionCell.layer);
+                  const jStar = displayLayerIndices.findIndex((li) => li > intLayerIdx);
+                  const dStar = displayTokenIndices.findIndex(
+                    (ti) => ti >= interventionCell.tokenPosition,
+                  );
+                  if (jStar >= 0) affX = cellColLeft(jStar);
+                  if (dStar >= 0) affY = cellRowTop(dStar);
+                }
 
                 const overlayBase: React.CSSProperties = {
                   position: 'absolute',
@@ -355,41 +376,60 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   zIndex: -1,
                 };
 
+                // Split a highlight band into a purple part (the affected
+                // bottom-right quadrant beyond affX/affY) and pink parts (the
+                // rest), so each band is purple exactly where its cells are.
+                const splitBand = (
+                  left: number,
+                  top: number,
+                  width: number,
+                  height: number,
+                  alpha: number,
+                ) => {
+                  const right = left + width;
+                  const bottom = top + height;
+                  const cutX = Math.min(Math.max(affX, left), right);
+                  const cutY = Math.min(Math.max(affY, top), bottom);
+                  const parts: {
+                    left: number;
+                    top: number;
+                    width: number;
+                    height: number;
+                    color: string;
+                  }[] = [];
+                  if (right > cutX && bottom > cutY) {
+                    parts.push({ left: cutX, top: cutY, width: right - cutX, height: bottom - cutY, color: rgba(purple, alpha) });
+                  }
+                  if (cutX > left) {
+                    parts.push({ left, top, width: cutX - left, height, color: rgba(pink, alpha) });
+                  }
+                  if (right > cutX && cutY > top) {
+                    parts.push({ left: cutX, top, width: right - cutX, height: cutY - top, color: rgba(pink, alpha) });
+                  }
+                  return parts;
+                };
+
+                const bands = [
+                  ...splitBand(coneLeft, coneTop, coneWidth, coneHeight, 0.18),
+                  ...splitBand(colLeft, colTop, cellWidth, colHeight, 0.35),
+                  ...splitBand(rowLeft, rowTop, totalColsW, rowHeight, 0.35),
+                ];
+
                 return (
                   <>
-                    {/* Cone underlay (cyan, debug). */}
-                    <div
-                      style={{
-                        ...overlayBase,
-                        left: coneLeft,
-                        top: coneTop,
-                        width: coneWidth,
-                        height: coneHeight,
-                        backgroundColor: tintWeak,
-                      }}
-                    />
-                    {/* Column band (magenta, debug). */}
-                    <div
-                      style={{
-                        ...overlayBase,
-                        left: colLeft,
-                        top: colTop,
-                        width: cellWidth,
-                        height: colHeight,
-                        backgroundColor: tintColumn,
-                      }}
-                    />
-                    {/* Row band (yellow, debug). */}
-                    <div
-                      style={{
-                        ...overlayBase,
-                        left: rowLeft,
-                        top: rowTop,
-                        width: totalColsW,
-                        height: rowHeight,
-                        backgroundColor: tintRow,
-                      }}
-                    />
+                    {bands.map((b, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          ...overlayBase,
+                          left: b.left,
+                          top: b.top,
+                          width: b.width,
+                          height: b.height,
+                          backgroundColor: b.color,
+                        }}
+                      />
+                    ))}
                   </>
                 );
               })()}
