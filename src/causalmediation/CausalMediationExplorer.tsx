@@ -7,6 +7,7 @@ import { TokenPredictionPanel } from './components/TokenPredictionPanel';
 import { ResultSidebar } from './components/ResultSidebar';
 import { CurvedPatchArrow } from './components/CurvedPatchArrow';
 import { PromptInput, Intervention, SelectedCell } from './types';
+import { formatTokenDisplay } from './utils/formatToken';
 import type { LogitLensData } from '../LogitLensGrid';
 import { createMockLogitLensData, generateInterventionResult } from './utils/mockData';
 import { motion, AnimatePresence } from 'motion/react';
@@ -149,7 +150,9 @@ export function CausalMediationExplorer({
     const rowFootprint = 48 + 8 + 6 + 8;
     const tokenColWidth = 80; // BASE_TOKEN_COL_WIDTH
     const interGridGap = 24; // gap-1.5rem between the two grids
-    const padding = 40; // horizontal reserve (token-col gutter + card padding)
+    // Horizontal reserve: token-col gutter + card padding + the ~20px rotated
+    // "Tokens" y-axis title strip that sits left of the scroll container.
+    const padding = 48;
 
     // Vertical chrome inside gridsSize.height that is NOT cell rows, so the
     // token-fit budget excludes it. gridsSize.height (gridsRef.clientHeight)
@@ -290,6 +293,17 @@ export function CausalMediationExplorer({
     setResultSelectedCell(null);
   };
 
+  // Reference tokens for the top-k lists' "final prediction" markers: the
+  // top-1 at the final layer of the clicked row, and the top-1 at the final
+  // layer of the last position (the model's actual output).
+  const finalTokensFor = (data: LogitLensData, tokenPosition: number) => {
+    const lastLayerIdx = data.layers.length - 1;
+    return {
+      rowFinalToken: data.data[tokenPosition]?.[lastLayerIdx]?.token,
+      gridFinalToken: data.data[data.data.length - 1]?.[lastLayerIdx]?.token,
+    };
+  };
+
   const handleCellClick = (promptId: string, tokenPosition: number, layer: number) => {
     let data: LogitLensData | null = null;
 
@@ -311,6 +325,7 @@ export function CausalMediationExplorer({
       layer,
       topTokens: cell.topTokens,
       promptId,
+      ...finalTokensFor(data, tokenPosition),
     });
   };
 
@@ -325,6 +340,7 @@ export function CausalMediationExplorer({
       layer,
       topTokens: cell.topTokens,
       promptId: 'result',
+      ...finalTokensFor(resultData, tokenPosition),
     });
   };
 
@@ -341,8 +357,26 @@ export function CausalMediationExplorer({
         layer: lastLayer,
         topTokens: lastCell.topTokens,
         promptId: 'result',
+        rowFinalToken: lastCell.token,
+        gridFinalToken: lastCell.token,
       });
     }
+  }, [resultData]);
+
+  // Once the intervention result is ready, bring it into view — it mounts
+  // below the two source/target grids, past the fold, and pilot users didn't
+  // notice it appear. Only fires on the null -> data transition so manual
+  // scrolling afterwards isn't hijacked by refetches.
+  const resultContainerRef = useRef<HTMLDivElement>(null);
+  const hadResultRef = useRef(false);
+  useEffect(() => {
+    const hasResult = !!resultData;
+    if (hasResult && !hadResultRef.current) {
+      requestAnimationFrame(() => {
+        resultContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+    hadResultRef.current = hasResult;
   }, [resultData]);
 
   const resultPromptInput = useMemo<PromptInput | null>(
@@ -455,6 +489,7 @@ export function CausalMediationExplorer({
           <AnimatePresence>
             {resultPromptInput && intervention && (
               <motion.div
+                ref={resultContainerRef}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
@@ -521,7 +556,7 @@ export function CausalMediationExplorer({
                           backgroundColor: '#ffffff',
                         }}
                       />
-                      [{sourcePrompt.data.tokens[intervention.sourceTokenPosition]}, Layer {intervention.sourceLayer}]
+                      [{formatTokenDisplay(sourcePrompt.data.tokens[intervention.sourceTokenPosition] ?? '')}, Layer {intervention.sourceLayer}]
                     </span>
                     <span style={{ fontSize: 18, color: '#6b7280' }}>&rarr;</span>
                     <span
@@ -545,7 +580,7 @@ export function CausalMediationExplorer({
                           backgroundColor: '#ffffff',
                         }}
                       />
-                      [{targetPrompt.data.tokens[intervention.targetTokenPosition]}, Layer {intervention.targetLayer}]
+                      [{formatTokenDisplay(targetPrompt.data.tokens[intervention.targetTokenPosition] ?? '')}, Layer {intervention.targetLayer}]
                     </span>
                   </div>
 

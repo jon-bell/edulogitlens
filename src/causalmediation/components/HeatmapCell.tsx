@@ -1,6 +1,7 @@
 import React from 'react';
 import { useDrag } from 'react-dnd';
 import { motion } from 'motion/react';
+import { formatTokenDisplay } from '../utils/formatToken';
 
 interface HeatmapCellProps {
   tokenPosition: number;
@@ -14,8 +15,8 @@ interface HeatmapCellProps {
   isHighlighted?: boolean;
   onClick?: () => void;
   isIntervention?: boolean;
-  // Downstream of the patch: draws a purple border so a cell whose FILL is the
-  // brown final-token tint is still visibly marked as tainted.
+  // Downstream of the patch: draws a purple border so a near-white
+  // low-probability cell is still visibly marked as tainted.
   isTainted?: boolean;
   taintColor?: string;
   animationDelay?: number;
@@ -146,7 +147,7 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
           }}
           title={predictedToken}
         >
-          {predictedToken}
+          {formatTokenDisplay(predictedToken)}
         </span>
 
         {/* Dim cells outside the row/column/cone so the highlighted region

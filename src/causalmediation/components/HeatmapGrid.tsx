@@ -3,6 +3,7 @@ import { useDrop } from 'react-dnd';
 import { motion } from 'motion/react';
 import { PromptInput, SelectedCell } from '../types';
 import { HeatmapCell } from './HeatmapCell';
+import { formatTokenDisplay } from '../utils/formatToken';
 import { FlowArrow } from './FlowArrow';
 import { VerticalFlowArrow } from './VerticalFlowArrow';
 
@@ -15,6 +16,18 @@ const BASE_VERT_ARROW_HEIGHT = 6;
 const BASE_TOKEN_COL_WIDTH = 80;
 const BASE_LABEL_FONT = 14;
 const BASE_CELL_FONT = 12;
+
+// Measured positions (px, relative to the inline-block content div) of every
+// rendered cell row and cell column. The highlight bands and the patched-cell
+// exclusion are painted from these MEASURED rects rather than arithmetic:
+// fractional cell sizes at non-100% zoom made index-multiplied math drift
+// further down the grid, so bands stopped sitting pixel-exact on their rows.
+interface OverlayGeom {
+  rowTops: number[];
+  rowHeights: number[];
+  colLefts: number[];
+  colWidths: number[];
+}
 
 interface HeatmapGridProps {
   prompt: PromptInput;
@@ -188,6 +201,57 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     );
   const displayTokens = displayTokenIndices.map((i) => allTokens[i]);
 
+  // Measure the real rendered position of each cell row / cell column after
+  // layout. getBoundingClientRect is used (not offsetTop/offsetLeft) for
+  // sub-pixel accuracy; positions are taken relative to the content div, which
+  // makes them scroll-invariant. The equality guard stops the every-render
+  // layout effect from looping; the ResizeObserver catches layout shifts that
+  // happen without a React render (e.g. web-font load resizing the headers).
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const rowElsRef = React.useRef(new Map<number, HTMLElement>());
+  const colElsRef = React.useRef(new Map<number, HTMLElement>());
+  const [overlayGeom, setOverlayGeom] = React.useState<OverlayGeom | null>(null);
+
+  const measureOverlayGeom = React.useCallback(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const base = content.getBoundingClientRect();
+    const rowTops: number[] = [];
+    const rowHeights: number[] = [];
+    for (let d = 0; d < rowElsRef.current.size; d++) {
+      const el = rowElsRef.current.get(d);
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      rowTops.push(r.top - base.top);
+      rowHeights.push(r.height);
+    }
+    const colLefts: number[] = [];
+    const colWidths: number[] = [];
+    for (let j = 0; j < colElsRef.current.size; j++) {
+      const el = colElsRef.current.get(j);
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      colLefts.push(r.left - base.left);
+      colWidths.push(r.width);
+    }
+    setOverlayGeom((prev) => {
+      const next = { rowTops, rowHeights, colLefts, colWidths };
+      return prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    });
+  }, []);
+
+  React.useLayoutEffect(() => {
+    measureOverlayGeom();
+  });
+
+  React.useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const ro = new ResizeObserver(() => measureOverlayGeom());
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [measureOverlayGeom]);
+
   const isInterventionCell = (tokenPos: number, layerIdx: number): boolean => {
     if (!isResult || !interventionCell) return false;
     return (
@@ -210,25 +274,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     );
   };
 
-  // The model's final next-token prediction = top-1 token at the last position,
-  // final layer. Cells anywhere in the grid whose own top-1 equals it are tinted
-  // orange (ramped by probability) instead of the base color, so you can see
-  // where in the network the final answer emerges — mirrors the nnsightful
-  // LogitLensWidget.
-  const FINAL_PRED_HEX = '#cc6622';
-  const finalPredToken =
-    prompt.data.data[prompt.data.tokens.length - 1]?.[prompt.data.layers.length - 1]?.token ?? '';
-
   const getBaseColor = (tokenPos: number, layerIdx: number): string => {
     if (isInterventionCell(tokenPos, layerIdx)) {
       return interventionCell?.sourceColor || prompt.color;
-    }
-    // The final-token tint wins over the affected (purple) FILL so the answer's
-    // emergence stays visible even inside the patch cone. Tainted cells that land
-    // here instead get a purple BORDER (see isTainted at the cell) so they're
-    // still marked as downstream of the patch.
-    if (finalPredToken !== '' && prompt.data.data[tokenPos]?.[layerIdx]?.token === finalPredToken) {
-      return FINAL_PRED_HEX;
     }
     if (isCellAffected(tokenPos, layerIdx)) {
       return blendColor || prompt.color;
@@ -257,9 +305,27 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             />
           </div>
 
+          <div className="flex min-w-0 w-full">
+          {/* Y-axis title — OUTSIDE the scroll container so it stays visible
+              regardless of scroll, mirroring the "Layer" x-axis titles. Reads
+              bottom-to-top per the usual y-axis convention. */}
+          <div
+            className="shrink-0 flex items-center justify-center"
+            style={{
+              width: Math.max(20, axisTitleFontSize * 1.6),
+              writingMode: 'vertical-rl',
+              transform: 'rotate(180deg)',
+              textAlign: 'center',
+              fontSize: axisTitleFontSize,
+              fontWeight: 600,
+              color: '#4b5563',
+            }}
+          >
+            Tokens (Step: {tokenStep})
+          </div>
           <div
             ref={scrollRef}
-            className="overflow-auto px-4 pb-4 w-full"
+            className="overflow-auto pr-4 pb-4 w-full min-w-0"
             style={{
               // Bumped from 60vh so autofit can pick more rows when fitting
               // a large heatmap to the viewport; below this autofit kicks in
@@ -271,6 +337,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             onScroll={handleScroll}
           >
             <div
+              ref={contentRef}
               className="inline-block min-w-full pt-4"
               // `isolation: isolate` creates a new stacking context so the
               // z-index:-1 overlay children below stay BEHIND the cells but
@@ -286,52 +353,68 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 // their wrapper below) to sit above these.
                 const selHere =
                   selectedCell?.promptId === prompt.id ? selectedCell : null;
-                if (!selHere) return null;
+                if (!selHere || !overlayGeom) return null;
                 const selRowDispIdx = displayTokenIndices.indexOf(selHere.tokenPosition);
                 const selColDispIdx = displayLayerIndices.indexOf(allLayers.indexOf(selHere.layer));
                 if (selRowDispIdx < 0 || selColDispIdx < 0) return null;
 
-                // Geometry of the inline-block content. pt-4 (= 16px) is the
-                // top padding; axis title row + sticky layer-number row sit
-                // above the cells.
-                const axisTitleH = axisTitleFontSize * 1.2 + 4; // text + mb-1
-                const stickyHeaderH = Math.max(24, cellHeight * 0.6) + 8; // + mb-2
-                const preRowsH = 16 + axisTitleH + stickyHeaderH;
-                const rowBlockH = cellHeight + 8 + vertArrowHeight + 8;
-                const halfGutter = (8 + vertArrowHeight + 8) / 2;
+                // All geometry is MEASURED off the rendered rows/columns (see
+                // measureOverlayGeom) — bail for a frame if the measurement
+                // hasn't caught up with the current row/column set yet.
+                const { rowTops, rowHeights, colLefts, colWidths } = overlayGeom;
+                if (
+                  rowTops.length !== displayTokens.length ||
+                  colLefts.length !== displayLayers.length
+                ) {
+                  return null;
+                }
 
-                // Cell-row top for display index d.
-                const cellRowTop = (d: number) => preRowsH + d * rowBlockH;
-                // Cell-column left for display index j.
-                const cellColLeft = (j: number) =>
-                  tokenColWidth + j * (cellWidth + horizArrowWidth);
+                const gridTop = rowTops[0];
+                const gridLeft = colLefts[0];
+                const lastRowBottom =
+                  rowTops[rowTops.length - 1] + rowHeights[rowHeights.length - 1];
+                const lastColRight =
+                  colLefts[colLefts.length - 1] + colWidths[colWidths.length - 1];
+
+                // Half the measured gutter between a row/column and each
+                // neighbor — bands extend halfway into the arrow gutters.
+                const gapAbove = (d: number) =>
+                  d > 0 ? (rowTops[d] - (rowTops[d - 1] + rowHeights[d - 1])) / 2 : 0;
+                const gapBelow = (d: number) =>
+                  d < rowTops.length - 1
+                    ? (rowTops[d + 1] - (rowTops[d] + rowHeights[d])) / 2
+                    : 0;
+                const gapLeft = (j: number) =>
+                  j > 0 ? (colLefts[j] - (colLefts[j - 1] + colWidths[j - 1])) / 2 : 0;
+                const gapRight = (j: number) =>
+                  j < colLefts.length - 1
+                    ? (colLefts[j + 1] - (colLefts[j] + colWidths[j])) / 2
+                    : 0;
 
                 // Cone rectangle: top-left of grid down to bottom-right of
                 // selected cell.
-                const coneLeft = tokenColWidth;
-                const coneTop = preRowsH;
+                const coneLeft = gridLeft;
+                const coneTop = gridTop;
                 const coneWidth =
-                  (selColDispIdx + 1) * (cellWidth + horizArrowWidth) - horizArrowWidth;
-                const coneHeight = cellRowTop(selRowDispIdx) + cellHeight - preRowsH;
+                  colLefts[selColDispIdx] + colWidths[selColDispIdx] - gridLeft;
+                const coneHeight =
+                  rowTops[selRowDispIdx] + rowHeights[selRowDispIdx] - gridTop;
 
                 // Column band spans every row at the selected column.
-                const colLeft = cellColLeft(selColDispIdx);
-                const colTop = preRowsH;
-                const totalRowsH =
-                  (displayTokens.length - 1) * rowBlockH + cellHeight; // no trailing gutter on last row
-                const colHeight = totalRowsH;
+                const colLeft = colLefts[selColDispIdx];
+                const colTop = gridTop;
+                const colHeight = lastRowBottom - gridTop;
 
                 // Row band spans every column at the selected row, with the
                 // vertical-arrow gutters above/below split 50/50 between
                 // adjacent rows.
-                const rowTop = cellRowTop(selRowDispIdx) - (selRowDispIdx > 0 ? halfGutter : 0);
+                const rowTop = rowTops[selRowDispIdx] - gapAbove(selRowDispIdx);
                 const rowHeight =
-                  cellHeight +
-                  (selRowDispIdx > 0 ? halfGutter : 0) +
-                  (selRowDispIdx < displayTokens.length - 1 ? halfGutter : 0);
-                const rowLeft = tokenColWidth;
-                const totalColsW =
-                  displayLayers.length * cellWidth + (displayLayers.length - 1) * horizArrowWidth;
+                  rowHeights[selRowDispIdx] +
+                  gapAbove(selRowDispIdx) +
+                  gapBelow(selRowDispIdx);
+                const rowLeft = gridLeft;
+                const totalColsW = lastColRight - gridLeft;
 
                 const toRgb = (hex: string) => {
                   const c = hex.replace('#', '');
@@ -363,8 +446,8 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   const dStar = displayTokenIndices.findIndex(
                     (ti) => ti >= interventionCell.tokenPosition,
                   );
-                  if (jStar >= 0) affX = cellColLeft(jStar);
-                  if (dStar >= 0) affY = cellRowTop(dStar);
+                  if (jStar >= 0) affX = colLefts[jStar];
+                  if (dStar >= 0) affY = rowTops[dStar];
                 }
 
                 const overlayBase: React.CSSProperties = {
@@ -411,9 +494,43 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
                 const bands = [
                   ...splitBand(coneLeft, coneTop, coneWidth, coneHeight, 0.18),
-                  ...splitBand(colLeft, colTop, cellWidth, colHeight, 0.35),
+                  ...splitBand(colLeft, colTop, colWidths[selColDispIdx], colHeight, 0.35),
                   ...splitBand(rowLeft, rowTop, totalColsW, rowHeight, 0.35),
                 ];
+
+                // "No background around the patched cell": paint an opaque
+                // white rect over the bands covering the intervention cell
+                // plus a half-gutter ring around it, so the patched cell
+                // floats on the plain card background instead of sitting
+                // inside the pink/purple tint. Same z-index -1 layer, painted
+                // AFTER the bands so it wins where they overlap (the card
+                // background is white, so it reads as "no background").
+                let exclusion: {
+                  left: number;
+                  top: number;
+                  width: number;
+                  height: number;
+                } | null = null;
+                if (isResult && interventionCell) {
+                  const intRow = displayTokenIndices.indexOf(interventionCell.tokenPosition);
+                  const intCol = displayLayerIndices.indexOf(
+                    allLayers.indexOf(interventionCell.layer),
+                  );
+                  if (intRow >= 0 && intCol >= 0) {
+                    // At grid edges (no neighbor on one side) mirror the
+                    // opposite gap so the ring stays visually even.
+                    const ringAbove = gapAbove(intRow) || gapBelow(intRow);
+                    const ringBelow = gapBelow(intRow) || gapAbove(intRow);
+                    const ringLeft = gapLeft(intCol) || gapRight(intCol);
+                    const ringRight = gapRight(intCol) || gapLeft(intCol);
+                    exclusion = {
+                      left: colLefts[intCol] - ringLeft,
+                      top: rowTops[intRow] - ringAbove,
+                      width: colWidths[intCol] + ringLeft + ringRight,
+                      height: rowHeights[intRow] + ringAbove + ringBelow,
+                    };
+                  }
+                }
 
                 return (
                   <>
@@ -430,6 +547,18 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         }}
                       />
                     ))}
+                    {exclusion && (
+                      <div
+                        style={{
+                          ...overlayBase,
+                          left: exclusion.left,
+                          top: exclusion.top,
+                          width: exclusion.width,
+                          height: exclusion.height,
+                          backgroundColor: '#ffffff',
+                        }}
+                      />
+                    )}
                   </>
                 );
               })()}
@@ -445,7 +574,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                     color: '#4b5563',
                   }}
                 >
-                  Layer
+                  Layer (Step: {layerStep})
                 </div>
               </div>
               {/* Sticky layer-number row at top */}
@@ -508,7 +637,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   nextTokenPos != null ? nextTokenPos - tokenPos - 1 : 0;
                 return (
                   <div key={tokenPos}>
-                    <div className="flex items-center mb-2">
+                    <div
+                      className="flex items-center mb-2"
+                      ref={(el) => {
+                        if (el) rowElsRef.current.set(displayRowIdx, el);
+                        else rowElsRef.current.delete(displayRowIdx);
+                      }}
+                    >
                       <div
                         className="shrink-0 pr-3 text-right font-medium text-gray-700 truncate"
                         style={{
@@ -524,14 +659,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         {tokenText.trim() === '' ? (
                           // Whitespace-only tokens (e.g. a trailing " ") would
                           // render invisibly, making the row look unlabeled /
-                          // "missing". Show a muted middle-dot per whitespace
-                          // char so the row is clearly visible. Raw token stays
-                          // in the title for hover.
+                          // "missing". Muted so the marker reads as "space",
+                          // not as literal text. Raw token stays in the title.
                           <span className="text-gray-400">
-                            {'·'.repeat(tokenText.length || 1)}
+                            {formatTokenDisplay(tokenText || ' ')}
                           </span>
                         ) : (
-                          tokenText
+                          formatTokenDisplay(tokenText)
                         )}
                       </div>
 
@@ -552,7 +686,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         const baseColor = getBaseColor(tokenPos, layerIdx);
                         const isIntervention = isInterventionCell(tokenPos, layerIdx);
                         // Downstream of the patch: gets a purple border so a
-                        // brown-filled (final-token) cell is still marked tainted.
+                        // near-white low-probability cell is still marked tainted.
                         const isTainted = isCellAffected(tokenPos, layerIdx);
                         const animationDelay = getAnimationDelay(tokenPos, layerIdx);
 
@@ -591,6 +725,16 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                             style={{ flexShrink: 0 }}
                           >
                             <div
+                              // Column geometry is measured off the first
+                              // rendered row's cell wrappers.
+                              ref={
+                                displayRowIdx === 0
+                                  ? (el) => {
+                                      if (el) colElsRef.current.set(displayColIdx, el);
+                                      else colElsRef.current.delete(displayColIdx);
+                                    }
+                                  : undefined
+                              }
                               style={{
                                 width: cellWidth,
                                 height: cellHeight,
@@ -652,10 +796,11 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                               // gutter when auto-fit hid layers between this col
                               // and the next. Clicking reveals those layers.
                               if (hiddenLayers > 0) {
-                                // Keep the flow chevron, but draw a vertical
-                                // dashed break-line behind it to signal the
-                                // collapsed layers. The whole gutter stays
-                                // clickable to reveal them.
+                                // Amber break-band: collapsed layers need a
+                                // loud cue, not a faint dashed line. The whole
+                                // gutter is an amber, clickable column with a
+                                // vertical "⋯N" count label; clicking reveals
+                                // the hidden layers.
                                 return (
                                   <button
                                     type="button"
@@ -664,13 +809,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                     onClick={() =>
                                       expandLayerGap(layerIdx, displayLayerIndices[displayColIdx + 1])
                                     }
-                                    className="shrink-0 flex items-center justify-center hover:bg-gray-100/60 transition-colors"
+                                    className="shrink-0 flex items-center justify-center bg-amber-100 hover:bg-amber-200 transition-colors"
                                     style={{
                                       width: horizArrowWidth,
                                       height: cellHeight,
                                       position: 'relative',
                                       cursor: 'pointer',
-                                      background: 'none',
                                       border: 'none',
                                       padding: 0,
                                     }}
@@ -682,11 +826,24 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                         top: 0,
                                         bottom: 0,
                                         left: '50%',
-                                        borderLeft: '1px dashed #cbd5e1',
+                                        borderLeft: '1px dashed #d97706',
                                         pointerEvents: 'none',
                                       }}
                                     />
-                                    <FlowArrow color={baseColor} opacity={0.9} />
+                                    <span
+                                      style={{
+                                        position: 'relative',
+                                        writingMode: 'vertical-rl',
+                                        fontSize: 10,
+                                        fontWeight: 600,
+                                        lineHeight: 1,
+                                        color: '#78350f',
+                                        backgroundColor: 'inherit',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      {`⋯${hiddenLayers}`}
+                                    </span>
                                   </button>
                                 );
                               }
@@ -731,21 +888,45 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                           pointerEvents: 'none',
                         }}
                       >
-                        {/* Dashed break-line behind the chevrons, only when this
-                            gap hides rows. Spans from the token column to the end. */}
+                        {/* Amber break-band behind the chevrons, only when this
+                            gap hides rows. Spans from the token column to the
+                            end, and extends ~5px into the row margins above and
+                            below (visual overflow only — layout heights stay
+                            uniform so the two grids' rows keep aligning). The
+                            whole band is clickable to expand the hidden rows. */}
                         {hiddenRows > 0 && (
-                          <div
+                          <button
+                            type="button"
                             aria-hidden="true"
+                            tabIndex={-1}
+                            title={`${hiddenRows} hidden token${hiddenRows > 1 ? 's' : ''} — click to expand`}
+                            onClick={() => expandTokenGap(tokenPos, nextTokenPos as number)}
+                            className="bg-amber-100 hover:bg-amber-200 transition-colors"
                             style={{
                               position: 'absolute',
                               left: tokenColWidth,
                               right: 0,
-                              top: '50%',
-                              borderTop: '1px dashed #cbd5e1',
-                              pointerEvents: 'none',
+                              top: -5,
+                              bottom: -5,
+                              border: 'none',
+                              padding: 0,
+                              cursor: 'pointer',
+                              pointerEvents: 'auto',
                               zIndex: 0,
                             }}
-                          />
+                          >
+                            <div
+                              aria-hidden="true"
+                              style={{
+                                position: 'absolute',
+                                left: 0,
+                                right: 0,
+                                top: '50%',
+                                borderTop: '1px dashed #d97706',
+                                pointerEvents: 'none',
+                              }}
+                            />
+                          </button>
                         )}
                         {/* Sticky-left column: a clickable count label when this
                             gap is collapsed, otherwise an empty spacer. */}
@@ -766,20 +947,28 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                               data-testid="token-gap-expander"
                               title={`${hiddenRows} hidden token${hiddenRows > 1 ? 's' : ''} — click to expand`}
                               onClick={() => expandTokenGap(tokenPos, nextTokenPos as number)}
-                              className="text-gray-400 hover:text-gray-700 rounded transition-colors"
+                              className="bg-amber-100 hover:bg-amber-200 text-amber-900 transition-colors"
                               style={{
-                                fontSize: 9,
+                                position: 'absolute',
+                                left: 0,
+                                right: 0,
+                                top: -5,
+                                bottom: -5,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'flex-end',
+                                fontSize: 10,
+                                fontWeight: 600,
                                 lineHeight: 1,
                                 whiteSpace: 'nowrap',
                                 paddingLeft: 4,
-                                paddingRight: 4,
+                                paddingRight: 8,
                                 cursor: 'pointer',
-                                background: 'none',
                                 border: 'none',
                                 pointerEvents: 'auto',
                               }}
                             >
-                              {`... ${hiddenRows} (hidden)`}
+                              {`⋯ ${hiddenRows} hidden`}
                             </button>
                           )}
                         </div>
@@ -838,11 +1027,33 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                               </div>
                               {displayColIdx < displayLayers.length - 1 && (
                                 <div
+                                  // Continue the amber collapsed-layers column
+                                  // through this gutter row so the break-band
+                                  // reads as one continuous vertical sweep.
+                                  className={
+                                    displayLayerIndices[displayColIdx + 1] - layerIdx - 1 > 0
+                                      ? 'bg-amber-100'
+                                      : undefined
+                                  }
                                   style={{
                                     width: horizArrowWidth,
                                     height: vertArrowHeight,
+                                    position: 'relative',
                                   }}
-                                />
+                                >
+                                  {displayLayerIndices[displayColIdx + 1] - layerIdx - 1 > 0 && (
+                                    <div
+                                      aria-hidden="true"
+                                      style={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        bottom: 0,
+                                        left: '50%',
+                                        borderLeft: '1px dashed #d97706',
+                                      }}
+                                    />
+                                  )}
+                                </div>
                               )}
                             </div>
                           );
@@ -904,11 +1115,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                     color: '#4b5563',
                   }}
                 >
-                  Layer
+                  Layer (Step: {layerStep})
                 </div>
               </div>
 
             </div>
+          </div>
           </div>
 
           {/* Probability color-scale legend — below the scroll container,
@@ -935,32 +1147,6 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
               }}
             />
             <span style={{ fontSize: 10, color: '#6b7280' }}>1.0</span>
-            {/* Key for the final-output-token tint (see FINAL_PRED_HEX): cells
-                whose top-1 equals the model's final next-token prediction are
-                tinted brown instead of the prompt color. */}
-            {finalPredToken !== '' && (
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  marginLeft: 12,
-                }}
-              >
-                <span
-                  style={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: 2,
-                    backgroundColor: FINAL_PRED_HEX,
-                    border: '1px solid #e5e7eb',
-                  }}
-                />
-                <span style={{ fontSize: 11, color: '#374151' }}>
-                  Final output token
-                </span>
-              </span>
-            )}
           </div>
         </div>
 
