@@ -365,19 +365,33 @@ export function CausalMediationExplorer({
 
   // Once the intervention result is ready, bring it into view — it mounts
   // below the two source/target grids, past the fold, and pilot users didn't
-  // notice it appear. Only fires on the null -> data transition so manual
+  // notice it appear. Only queued on the null -> data transition so manual
   // scrolling afterwards isn't hijacked by refetches.
   const resultContainerRef = useRef<HTMLDivElement>(null);
+  const pendingResultScrollRef = useRef(false);
   const hadResultRef = useRef(false);
   useEffect(() => {
     const hasResult = !!resultData;
-    if (hasResult && !hadResultRef.current) {
-      requestAnimationFrame(() => {
-        resultContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    }
+    if (hasResult && !hadResultRef.current) pendingResultScrollRef.current = true;
     hadResultRef.current = hasResult;
   }, [resultData]);
+
+  // Fire the queued scroll only after layout has settled. On a restored patch
+  // the result exists at MOUNT, when auto-fit hasn't measured the wrapper or
+  // applied its derived steps yet — scrolling then lands on a position that
+  // the following relayout invalidates. Waiting until the applied steps match
+  // the auto-fit target (or auto-fit is off) scrolls to the final geometry.
+  // A live drag has settled layout already, so it scrolls immediately.
+  const stepsSettled =
+    !autoFit ||
+    (!!gridsSize && tokenStep === autoStep.tokenStep && layerStep === autoStep.layerStep);
+  useEffect(() => {
+    if (!pendingResultScrollRef.current || !resultData || !stepsSettled) return;
+    pendingResultScrollRef.current = false;
+    requestAnimationFrame(() => {
+      resultContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [resultData, stepsSettled]);
 
   const resultPromptInput = useMemo<PromptInput | null>(
     () =>
