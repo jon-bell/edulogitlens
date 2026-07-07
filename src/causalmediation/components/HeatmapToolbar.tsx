@@ -1,38 +1,61 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { ZoomIn, ZoomOut, RotateCcw, Info } from 'lucide-react';
 
 const STEP_TOOLTIP =
   'Downsampling stride: show every Nth token/layer so large models fit on screen. Set to 1 to show all; higher values hide rows/columns (marked by the amber bands).';
 
 // A native `title` tooltip on the info icon proved unreliable (no visible
-// tooltip, no click response), and this repo has no Radix. This shows a small
-// popover on hover/focus and toggles on click, so it works everywhere.
+// tooltip, no click response), and this repo has no Radix. The popover is
+// rendered in a portal with fixed positioning so it escapes the toolbar's
+// `overflow-hidden` wrapper and the sibling heatmap grid's stacking context
+// (otherwise it renders clipped / behind the heatmaps).
 const InfoTooltip: React.FC<{ text: string }> = ({ text }) => {
-  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  const show = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setPos({ top: r.bottom + 6, left: r.left + r.width / 2 });
+  };
+  const hide = () => setPos(null);
+
   return (
-    <span className="relative inline-flex items-center">
+    <span className="inline-flex items-center">
       <button
+        ref={btnRef}
         type="button"
         aria-label={text}
         // Open on hover/focus/click, close on leave/blur — no toggle, so a
-        // hover-then-click (which is what a mouse does) doesn't cancel itself.
-        onClick={() => setOpen(true)}
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
+        // hover-then-click (what a mouse does) doesn't cancel itself.
+        onClick={show}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
         className="text-gray-400 hover:text-gray-600 transition-colors"
       >
         <Info size={14} />
       </button>
-      {open && (
-        <span
-          role="tooltip"
-          className="absolute left-1/2 top-full z-50 mt-1 w-60 -translate-x-1/2 rounded-md bg-gray-900 px-2.5 py-1.5 text-xs font-normal leading-snug text-white shadow-lg"
-        >
-          {text}
-        </span>
-      )}
+      {pos &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <span
+            role="tooltip"
+            style={{
+              position: 'fixed',
+              top: pos.top,
+              left: pos.left,
+              transform: 'translateX(-50%)',
+              zIndex: 9999,
+              maxWidth: 240,
+            }}
+            className="rounded-md bg-gray-900 px-2.5 py-1.5 text-xs font-normal leading-snug text-white shadow-lg"
+          >
+            {text}
+          </span>,
+          document.body,
+        )}
     </span>
   );
 };
