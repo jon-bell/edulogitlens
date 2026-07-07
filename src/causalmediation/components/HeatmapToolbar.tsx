@@ -1,5 +1,8 @@
 import React from 'react';
-import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { ZoomIn, ZoomOut, RotateCcw, Info } from 'lucide-react';
+
+const STEP_TOOLTIP =
+  'Downsampling stride: show every Nth token/layer so large models fit on screen. Set to 1 to show all; higher values hide rows/columns (marked by the amber bands).';
 
 interface HeatmapToolbarProps {
   zoom: number;
@@ -80,6 +83,9 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
             onChange={(e) => onTokenStepChange(Math.max(1, parseInt(e.target.value) || 1))}
             className="w-16 text-center text-sm py-1 px-2 border border-gray-300 rounded outline-none focus:ring-2 focus:ring-blue-500"
           />
+          <span title={STEP_TOOLTIP} aria-label={STEP_TOOLTIP} className="cursor-help">
+            <Info size={14} className="text-gray-400 hover:text-gray-600 transition-colors" />
+          </span>
         </div>
 
         {/* Layer Step controls */}
@@ -93,6 +99,9 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
             onChange={(e) => onLayerStepChange(Math.max(1, parseInt(e.target.value) || 1))}
             className="w-16 text-center text-sm py-1 px-2 border border-gray-300 rounded outline-none focus:ring-2 focus:ring-blue-500"
           />
+          <span title={STEP_TOOLTIP} aria-label={STEP_TOOLTIP} className="cursor-help">
+            <Info size={14} className="text-gray-400 hover:text-gray-600 transition-colors" />
+          </span>
         </div>
 
         {/* Sync scroll toggle */}

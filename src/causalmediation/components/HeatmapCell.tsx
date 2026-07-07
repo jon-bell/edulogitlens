@@ -126,7 +126,9 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
             : isHighlighted
               ? `2px solid ${baseColor}`
               : `1px solid rgba(0,0,0,0.06)`,
-          outline: isSelected ? `2px solid #facc15` : 'none',
+          // Blue, not yellow: the previous #facc15 was the same hue family as
+          // the amber gap bands, so a selected cell was hard to distinguish.
+          outline: isSelected ? `2px solid #3b82f6` : 'none',
           outlineOffset: isSelected ? 1 : 0,
         }}
         initial={isIntervention ? { scale: 0.85, opacity: 0 } : false}

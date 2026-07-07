@@ -43,6 +43,9 @@ export const TokenPredictionPanel: React.FC<TokenPredictionPanelProps> = ({
     <AnimatePresence>
       {selectedCell && (
         <motion.div
+          // Stable hook so the workbench tutorial (reactour) can highlight this
+          // panel once it opens on a cell click.
+          id="patch-lens-topk"
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.96 }}

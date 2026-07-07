@@ -492,10 +492,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   return parts;
                 };
 
+                // Opacities are raised so the crosshair/cone stays clearly
+                // visible even where a translucent amber gap band is layered on
+                // top of it (the bands sit at z-index 0, this tint at -1).
                 const bands = [
-                  ...splitBand(coneLeft, coneTop, coneWidth, coneHeight, 0.18),
-                  ...splitBand(colLeft, colTop, colWidths[selColDispIdx], colHeight, 0.35),
-                  ...splitBand(rowLeft, rowTop, totalColsW, rowHeight, 0.35),
+                  ...splitBand(coneLeft, coneTop, coneWidth, coneHeight, 0.28),
+                  ...splitBand(colLeft, colTop, colWidths[selColDispIdx], colHeight, 0.5),
+                  ...splitBand(rowLeft, rowTop, totalColsW, rowHeight, 0.5),
                 ];
 
                 // "No background around the patched cell": paint an opaque
@@ -809,7 +812,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                     onClick={() =>
                                       expandLayerGap(layerIdx, displayLayerIndices[displayColIdx + 1])
                                     }
-                                    className="shrink-0 flex items-center justify-center bg-amber-100 hover:bg-amber-200 transition-colors"
+                                    className="shrink-0 flex items-center justify-center bg-amber-300/40 hover:bg-amber-300/60 transition-colors"
                                     style={{
                                       width: horizArrowWidth,
                                       height: cellHeight,
@@ -901,7 +904,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                             tabIndex={-1}
                             title={`${hiddenRows} hidden token${hiddenRows > 1 ? 's' : ''} — click to expand`}
                             onClick={() => expandTokenGap(tokenPos, nextTokenPos as number)}
-                            className="bg-amber-100 hover:bg-amber-200 transition-colors"
+                            className="bg-amber-300/40 hover:bg-amber-300/60 transition-colors"
                             style={{
                               position: 'absolute',
                               left: tokenColWidth,
@@ -947,7 +950,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                               data-testid="token-gap-expander"
                               title={`${hiddenRows} hidden token${hiddenRows > 1 ? 's' : ''} — click to expand`}
                               onClick={() => expandTokenGap(tokenPos, nextTokenPos as number)}
-                              className="bg-amber-100 hover:bg-amber-200 text-amber-900 transition-colors"
+                              className="bg-amber-300/40 hover:bg-amber-300/60 text-amber-900 transition-colors"
                               style={{
                                 position: 'absolute',
                                 left: 0,
@@ -1032,7 +1035,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   // reads as one continuous vertical sweep.
                                   className={
                                     displayLayerIndices[displayColIdx + 1] - layerIdx - 1 > 0
-                                      ? 'bg-amber-100'
+                                      ? 'bg-amber-300/40'
                                       : undefined
                                   }
                                   style={{
