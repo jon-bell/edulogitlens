@@ -492,13 +492,14 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   return parts;
                 };
 
-                // Opacities are raised so the crosshair/cone stays clearly
-                // visible even where a translucent amber gap band is layered on
-                // top of it (the bands sit at z-index 0, this tint at -1).
+                // This tint (z-index -1) now sits ABOVE the amber gap bands
+                // (z-index -2) and below the cells, so the blue/pink paints over
+                // the amber for clear definition. Opacities are strong so the
+                // highlight reads distinctly over the amber.
                 const bands = [
-                  ...splitBand(coneLeft, coneTop, coneWidth, coneHeight, 0.28),
-                  ...splitBand(colLeft, colTop, colWidths[selColDispIdx], colHeight, 0.5),
-                  ...splitBand(rowLeft, rowTop, totalColsW, rowHeight, 0.5),
+                  ...splitBand(coneLeft, coneTop, coneWidth, coneHeight, 0.32),
+                  ...splitBand(colLeft, colTop, colWidths[selColDispIdx], colHeight, 0.6),
+                  ...splitBand(rowLeft, rowTop, totalColsW, rowHeight, 0.6),
                 ];
 
                 // "No background around the patched cell": paint an opaque
@@ -915,7 +916,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                               padding: 0,
                               cursor: 'pointer',
                               pointerEvents: 'auto',
-                              zIndex: 0,
+                              // Below the crosshair/cone highlight (z-index -1) so
+                              // the blue paints OVER the amber where they cross,
+                              // giving the highlight clear definition. Still above
+                              // the card background, and clickable (the highlight
+                              // overlays are pointer-events: none).
+                              zIndex: -2,
                             }}
                           >
                             <div
