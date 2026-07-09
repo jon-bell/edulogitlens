@@ -644,7 +644,10 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 return (
                   <div key={tokenPos}>
                     <div
-                      className="flex items-center mb-2"
+                      // No bottom margin: the row header is exactly the cell
+                      // height, and the only vertical gap between rows is the
+                      // minimal chevron (vertical-flow-arrow) strip below.
+                      className="flex items-center"
                       ref={(el) => {
                         if (el) rowElsRef.current.set(displayRowIdx, el);
                         else rowElsRef.current.delete(displayRowIdx);
