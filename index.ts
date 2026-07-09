@@ -7,4 +7,5 @@ export type {
     PromptInput,
     Intervention,
     SelectedCell,
+    CausalMediationEvent,
 } from "./src/causalmediation/types";
