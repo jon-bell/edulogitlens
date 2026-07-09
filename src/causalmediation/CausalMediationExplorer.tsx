@@ -185,7 +185,11 @@ export function CausalMediationExplorer({
 
     return {
       layerStep: Math.max(1, Math.ceil(numLayers / layersThatFit)),
-      tokenStep: Math.max(1, Math.ceil(numTokens / tokensThatFit)),
+      // Token rows are never downsampled: with compact rows we always show every
+      // token (rows scroll if they overflow). Token-step downsampling read as a
+      // confusing extra concept, so it's fixed at 1 (tokensThatFit is unused now
+      // but kept for the layer-fit vertical-budget reasoning above).
+      tokenStep: 1,
     };
   }, [
     gridsSize,
@@ -203,10 +207,6 @@ export function CausalMediationExplorer({
     setLayerStep(autoStep.layerStep);
   }, [autoFit, autoStep.tokenStep, autoStep.layerStep]);
 
-  const handleTokenStepChange = (step: number) => {
-    setAutoFit(false);
-    setTokenStep(step);
-  };
   const handleLayerStepChange = (step: number) => {
     setAutoFit(false);
     setLayerStep(step);
@@ -415,8 +415,6 @@ export function CausalMediationExplorer({
             <HeatmapToolbar
               zoom={zoom}
               onZoomChange={setZoom}
-              tokenStep={tokenStep}
-              onTokenStepChange={handleTokenStepChange}
               layerStep={layerStep}
               onLayerStepChange={handleLayerStepChange}
               summary={toolbarSummary}

@@ -2,8 +2,8 @@ import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ZoomIn, ZoomOut, RotateCcw, Info } from 'lucide-react';
 
-const STEP_TOOLTIP =
-  'Downsampling stride: show every Nth token/layer so large models fit on screen. Set to 1 to show all; higher values hide rows/columns (marked by the amber bands).';
+const LAYER_STEP_TOOLTIP =
+  'Layer stride: show every Nth layer so wide models fit on screen. Set to 1 to show all layers; higher values hide columns (marked by the amber bands).';
 
 // A native `title` tooltip on the info icon proved unreliable (no visible
 // tooltip, no click response), and this repo has no Radix. The popover is
@@ -63,8 +63,6 @@ const InfoTooltip: React.FC<{ text: string }> = ({ text }) => {
 interface HeatmapToolbarProps {
   zoom: number;
   onZoomChange: (zoom: number) => void;
-  tokenStep: number;
-  onTokenStepChange: (step: number) => void;
   layerStep: number;
   onLayerStepChange: (step: number) => void;
   summary?: string;
@@ -75,8 +73,6 @@ interface HeatmapToolbarProps {
 export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
   zoom,
   onZoomChange,
-  tokenStep,
-  onTokenStepChange,
   layerStep,
   onLayerStepChange,
   summary,
@@ -128,21 +124,8 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
           </button>
         </div>
 
-        {/* Token Step controls */}
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-gray-700">Token Step:</span>
-          <input
-            type="number"
-            min="1"
-            max="10"
-            value={tokenStep}
-            onChange={(e) => onTokenStepChange(Math.max(1, parseInt(e.target.value) || 1))}
-            className="w-16 text-center text-sm py-1 px-2 border border-gray-300 rounded outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <InfoTooltip text={STEP_TOOLTIP} />
-        </div>
-
-        {/* Layer Step controls */}
+        {/* Layer Step controls (token rows are always shown, so there is no
+            token-step control — only layers get downsampled for wide models). */}
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-gray-700">Layer Step:</span>
           <input
@@ -153,7 +136,7 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
             onChange={(e) => onLayerStepChange(Math.max(1, parseInt(e.target.value) || 1))}
             className="w-16 text-center text-sm py-1 px-2 border border-gray-300 rounded outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <InfoTooltip text={STEP_TOOLTIP} />
+          <InfoTooltip text={LAYER_STEP_TOOLTIP} />
         </div>
 
         {/* Sync scroll toggle */}

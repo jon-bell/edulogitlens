@@ -8,7 +8,9 @@ import { FlowArrow } from './FlowArrow';
 import { VerticalFlowArrow } from './VerticalFlowArrow';
 
 const BASE_CELL_WIDTH = 72;
-const BASE_CELL_HEIGHT = 48;
+// Compact rows: token rows are no longer downsampled (token-step is fixed at 1),
+// so keep them short enough that a full prompt fits without a wall of tall rows.
+const BASE_CELL_HEIGHT = 30;
 // Tighter than the original arrow gutters (28 / 16): keep a little negative
 // space between cells for the chevron, but pack the grid noticeably denser.
 const BASE_HORIZ_ARROW_WIDTH = 12;
@@ -321,7 +323,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
               color: '#4b5563',
             }}
           >
-            Tokens (Step: {tokenStep})
+            Tokens
           </div>
           <div
             ref={scrollRef}
