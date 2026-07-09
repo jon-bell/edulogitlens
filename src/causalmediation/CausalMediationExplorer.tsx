@@ -6,7 +6,7 @@ import { HeatmapToolbar } from './components/HeatmapToolbar';
 import { TokenPredictionPanel } from './components/TokenPredictionPanel';
 import { ResultSidebar } from './components/ResultSidebar';
 import { CurvedPatchArrow } from './components/CurvedPatchArrow';
-import { PromptInput, Intervention, SelectedCell } from './types';
+import { PromptInput, Intervention, SelectedCell, CausalMediationEvent } from './types';
 import type { LogitLensData } from '../LogitLensGrid';
 import { createMockLogitLensData, generateInterventionResult } from './utils/mockData';
 import { motion, AnimatePresence } from 'motion/react';
@@ -36,6 +36,10 @@ interface CausalMediationExplorerProps {
   // drop its persisted spec; without it a controlled intervention would re-supply.
   onResetIntervention?: () => void;
   isInterventionPending?: boolean;
+  // Optional analytics hook: fired on discrete in-chart interactions (cell
+  // expand, result-cell expand, token/layer step changes). Coordinates only,
+  // no token text. Purely observational — does not affect widget behavior.
+  onEvent?: (event: CausalMediationEvent) => void;
 }
 
 export function CausalMediationExplorer({
@@ -48,6 +52,7 @@ export function CausalMediationExplorer({
   intervention: controlledIntervention,
   onResetIntervention,
   isInterventionPending = false,
+  onEvent,
 }: CausalMediationExplorerProps = {}) {
   const sourcePrompt = useMemo<PromptInput>(
     () => ({
@@ -203,10 +208,12 @@ export function CausalMediationExplorer({
   const handleTokenStepChange = (step: number) => {
     setAutoFit(false);
     setTokenStep(step);
+    onEvent?.({ type: 'token_step_change', step });
   };
   const handleLayerStepChange = (step: number) => {
     setAutoFit(false);
     setLayerStep(step);
+    onEvent?.({ type: 'layer_step_change', step });
   };
 
   const countVisible = (total: number, step: number) => {
@@ -312,6 +319,7 @@ export function CausalMediationExplorer({
       topTokens: cell.topTokens,
       promptId,
     });
+    onEvent?.({ type: 'cell_click', promptId, tokenPosition, layer });
   };
 
   const handleResultCellClick = (tokenPosition: number, layer: number) => {
@@ -326,6 +334,7 @@ export function CausalMediationExplorer({
       topTokens: cell.topTokens,
       promptId: 'result',
     });
+    onEvent?.({ type: 'result_cell_click', tokenPosition, layer });
   };
 
   // Auto-select last token / last layer of the result prompt
