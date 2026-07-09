@@ -30,3 +30,12 @@ export interface SelectedCell {
   // model's actual next-token output for the prompt.
   gridFinalToken?: string;
 }
+
+// Discrete, high-level interactions the explorer surfaces to an embedding host
+// (e.g. workbench product analytics). Emitted via the optional `onEvent` prop;
+// carries only cell/step coordinates, never token text.
+export type CausalMediationEvent =
+  | { type: 'cell_click'; promptId: string; tokenPosition: number; layer: number }
+  | { type: 'result_cell_click'; tokenPosition: number; layer: number }
+  | { type: 'token_step_change'; step: number }
+  | { type: 'layer_step_change'; step: number };
