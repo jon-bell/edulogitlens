@@ -42,6 +42,14 @@ interface CausalMediationExplorerProps {
   // expand, result-cell expand, token/layer step changes). Coordinates only,
   // no token text. Purely observational — does not affect widget behavior.
   onEvent?: (event: CausalMediationEvent) => void;
+  // Optional: reports the target's post-patch top predicted token — the
+  // last-position, final-layer output shown in the result grid — whenever a
+  // result becomes available (live drop or restored/controlled resultData), and
+  // again if a re-patch changes it. Deliberately separate from `onEvent`: this
+  // carries the model's predicted token (never participant text), for a host
+  // that scores an activity against the patch outcome (e.g. a guided tutorial
+  // asking "what did the target produce after the patch?"). Purely observational.
+  onInterventionResult?: (finalToken: string | null) => void;
 }
 
 export function CausalMediationExplorer({
@@ -55,6 +63,7 @@ export function CausalMediationExplorer({
   onResetIntervention,
   isInterventionPending = false,
   onEvent,
+  onInterventionResult,
 }: CausalMediationExplorerProps = {}) {
   const sourcePrompt = useMemo<PromptInput>(
     () => ({
@@ -389,6 +398,26 @@ export function CausalMediationExplorer({
       });
     }
   }, [resultData]);
+
+  // Report the post-patch output token to a host scoring an activity against
+  // the patch. Emit on every distinct grid-final token (last position, final
+  // layer) — covers the null->result transition and a re-patch that changes the
+  // outcome without an intervening reset; skips duplicate emits for the same
+  // token, and clears the memo on reset so an identical token re-emits later.
+  const lastEmittedResultTokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!resultData) {
+      lastEmittedResultTokenRef.current = null;
+      return;
+    }
+    const lastTokenIdx = resultData.data.length - 1;
+    const lastLayerIdx = resultData.layers.length - 1;
+    const token = resultData.data[lastTokenIdx]?.[lastLayerIdx]?.token ?? null;
+    if (token !== lastEmittedResultTokenRef.current) {
+      lastEmittedResultTokenRef.current = token;
+      onInterventionResult?.(token);
+    }
+  }, [resultData, onInterventionResult]);
 
   // Once the intervention result is ready, bring it into view — it mounts
   // below the two source/target grids, past the fold, and pilot users didn't
