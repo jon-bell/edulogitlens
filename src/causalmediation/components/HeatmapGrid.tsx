@@ -39,6 +39,10 @@ interface HeatmapGridProps {
   isDropTarget?: boolean;
   onDrop?: (item: any, targetTokenPos: number, targetLayer: number) => void;
   highlightCell?: { tokenPosition: number; layer: number };
+  // Guided-tutorial "Show me" pointer: rings a single cell (distinct from the
+  // intervention highlight). Layer resolves to the nearest rendered layer, so a
+  // downsampled grid still shows the ring near the requested depth.
+  spotlightCell?: { tokenPosition: number; layer: number };
   selectedCell?: SelectedCell | null;
   onCellClick?: (tokenPosition: number, layer: number) => void;
   isResult?: boolean;
@@ -64,6 +68,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   isDropTarget = false,
   onDrop,
   highlightCell,
+  spotlightCell,
   selectedCell,
   onCellClick,
   isResult = false,
@@ -196,6 +201,15 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     );
   const displayLayers = displayLayerIndices.map((i) => allLayers[i]);
 
+  // Snap the requested spotlight layer to the nearest rendered layer so the ring
+  // is visible even when the grid downsamples layers to fit.
+  const spotlightLayerValue =
+    spotlightCell && displayLayers.length > 0
+      ? displayLayers.reduce((best, lv) =>
+          Math.abs(lv - spotlightCell.layer) < Math.abs(best - spotlightCell.layer) ? lv : best,
+        )
+      : null;
+
   const displayTokenIndices = allTokens
     .map((_, idx) => idx)
     .filter(
@@ -296,6 +310,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden min-w-0 w-full">
+      {spotlightCell && (
+        <style>{`@keyframes elens-spotlight-pulse {
+          0%, 100% { box-shadow: 0 0 0 3px #2563eb, 0 0 12px 3px rgba(37,99,235,0.55); }
+          50% { box-shadow: 0 0 0 4px #2563eb, 0 0 18px 6px rgba(37,99,235,0.75); }
+        }`}</style>
+      )}
       <div className={showSidebar ? 'flex min-w-0 w-full' : 'w-full min-w-0'}>
         <div className={showSidebar ? 'flex-1 min-w-0' : 'w-full min-w-0'}>
           {/* Compact label strip */}
@@ -692,6 +712,10 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                           highlightCell?.tokenPosition === tokenPos &&
                           highlightCell?.layer === layerValue;
 
+                        const isSpotlit =
+                          spotlightCell?.tokenPosition === tokenPos &&
+                          spotlightLayerValue === layerValue;
+
                         const baseColor = getBaseColor(tokenPos, layerIdx);
                         const isIntervention = isInterventionCell(tokenPos, layerIdx);
                         // Downstream of the patch: gets a purple border so a
@@ -751,6 +775,16 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
+                                ...(isSpotlit
+                                  ? {
+                                      position: 'relative',
+                                      zIndex: 6,
+                                      borderRadius: 6,
+                                      boxShadow:
+                                        '0 0 0 3px #2563eb, 0 0 12px 3px rgba(37,99,235,0.55)',
+                                      animation: 'elens-spotlight-pulse 1.4s ease-in-out infinite',
+                                    }
+                                  : {}),
                               }}
                             >
                               {isDropTarget ? (
