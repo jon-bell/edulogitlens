@@ -39,10 +39,11 @@ interface HeatmapGridProps {
   isDropTarget?: boolean;
   onDrop?: (item: any, targetTokenPos: number, targetLayer: number) => void;
   highlightCell?: { tokenPosition: number; layer: number };
-  // Guided-tutorial "Show me" pointer: rings a single cell (distinct from the
-  // intervention highlight). Layer resolves to the nearest rendered layer, so a
-  // downsampled grid still shows the ring near the requested depth.
-  spotlightCell?: { tokenPosition: number; layer: number };
+  // Guided-tutorial "Show me" pointer: rings these cells (distinct from the
+  // intervention highlight). Each layer resolves to the nearest rendered layer,
+  // so a downsampled grid still shows the ring near the requested depth. Takes a
+  // list because a patching hint wants both ends of the drag lit at once.
+  spotlightCells?: { tokenPosition: number; layer: number }[];
   selectedCell?: SelectedCell | null;
   onCellClick?: (tokenPosition: number, layer: number) => void;
   isResult?: boolean;
@@ -68,7 +69,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   isDropTarget = false,
   onDrop,
   highlightCell,
-  spotlightCell,
+  spotlightCells,
   selectedCell,
   onCellClick,
   isResult = false,
@@ -201,14 +202,17 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     );
   const displayLayers = displayLayerIndices.map((i) => allLayers[i]);
 
-  // Snap the requested spotlight layer to the nearest rendered layer so the ring
-  // is visible even when the grid downsamples layers to fit.
-  const spotlightLayerValue =
-    spotlightCell && displayLayers.length > 0
-      ? displayLayers.reduce((best, lv) =>
-          Math.abs(lv - spotlightCell.layer) < Math.abs(best - spotlightCell.layer) ? lv : best,
-        )
-      : null;
+  // Snap each requested spotlight layer to the nearest rendered layer so the
+  // ring is visible even when the grid downsamples layers to fit.
+  const snappedSpotlights =
+    spotlightCells && displayLayers.length > 0
+      ? spotlightCells.map((c) => ({
+          tokenPosition: c.tokenPosition,
+          layer: displayLayers.reduce((best, lv) =>
+            Math.abs(lv - c.layer) < Math.abs(best - c.layer) ? lv : best,
+          ),
+        }))
+      : [];
 
   const displayTokenIndices = allTokens
     .map((_, idx) => idx)
@@ -310,7 +314,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden min-w-0 w-full">
-      {spotlightCell && (
+      {snappedSpotlights.length > 0 && (
         <style>{`@keyframes elens-spotlight-pulse {
           0%, 100% { box-shadow: 0 0 0 3px #2563eb, 0 0 12px 3px rgba(37,99,235,0.55); }
           50% { box-shadow: 0 0 0 4px #2563eb, 0 0 18px 6px rgba(37,99,235,0.75); }
@@ -712,9 +716,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                           highlightCell?.tokenPosition === tokenPos &&
                           highlightCell?.layer === layerValue;
 
-                        const isSpotlit =
-                          spotlightCell?.tokenPosition === tokenPos &&
-                          spotlightLayerValue === layerValue;
+                        const isSpotlit = snappedSpotlights.some(
+                          (s) => s.tokenPosition === tokenPos && s.layer === layerValue,
+                        );
 
                         const baseColor = getBaseColor(tokenPos, layerIdx);
                         const isIntervention = isInterventionCell(tokenPos, layerIdx);

@@ -98,21 +98,24 @@ export function CausalMediationExplorer({
   const [targetHighlightRef, setTargetHighlightRef] = useState<HTMLElement | null>(null);
 
   // Guided-tutorial "Show me" spotlight (opt-in via SpotlightProvider). Resolve
-  // the requested {grid, layer, position} against a grid's data, turning `'last'`
-  // into concrete indices; returns undefined when the spotlight isn't for that
-  // grid, so each HeatmapGrid only rings its own cell.
-  const { target: spotlight } = useSpotlight();
-  const resolveSpotlight = (
+  // the requested {grid, layer, position} cells against a grid's data, turning
+  // `'last'` into concrete indices; keeps only the cells addressed to that grid,
+  // so each HeatmapGrid rings its own. Several cells can be lit at once — a
+  // patching hint lights both ends of the drag.
+  const { targets: spotlights } = useSpotlight();
+  const resolveSpotlights = (
     grid: 'source' | 'target' | 'result',
     data: LogitLensData,
-  ): { tokenPosition: number; layer: number } | undefined => {
-    if (!spotlight || spotlight.grid !== grid) return undefined;
-    if (!data.tokens.length || !data.layers.length) return undefined;
+  ): { tokenPosition: number; layer: number }[] => {
+    if (!data.tokens.length || !data.layers.length) return [];
     const lastLayer = data.layers[data.layers.length - 1];
     const lastPos = data.tokens.length - 1;
-    const layer = spotlight.layer === 'last' ? lastLayer : spotlight.layer;
-    const tokenPosition = spotlight.position === 'last' ? lastPos : spotlight.position;
-    return { tokenPosition, layer };
+    return spotlights
+      .filter((s) => s.grid === grid)
+      .map((s) => ({
+        tokenPosition: s.position === 'last' ? lastPos : s.position,
+        layer: s.layer === 'last' ? lastLayer : s.layer,
+      }));
   };
 
   // When the parent passes `resultData` (controlled), it is the source of truth.
@@ -504,7 +507,7 @@ export function CausalMediationExplorer({
                       }
                     : undefined
                 }
-                spotlightCell={resolveSpotlight('source', sourcePrompt.data)}
+                spotlightCells={resolveSpotlights('source', sourcePrompt.data)}
                 selectedCell={selectedCell}
                 onCellClick={(tokenPos, layer) =>
                   handleCellClick(sourcePrompt.id, tokenPos, layer)
@@ -533,7 +536,7 @@ export function CausalMediationExplorer({
                       }
                     : undefined
                 }
-                spotlightCell={resolveSpotlight('target', targetPrompt.data)}
+                spotlightCells={resolveSpotlights('target', targetPrompt.data)}
                 selectedCell={selectedCell}
                 onCellClick={(tokenPos, layer) =>
                   handleCellClick(targetPrompt.id, tokenPos, layer)
@@ -664,7 +667,7 @@ export function CausalMediationExplorer({
                         tokenPosition: intervention.targetTokenPosition,
                         layer: intervention.targetLayer,
                       }}
-                      spotlightCell={resolveSpotlight('result', resultPromptInput.data)}
+                      spotlightCells={resolveSpotlights('result', resultPromptInput.data)}
                       selectedCell={resultSelectedCell}
                       onCellClick={handleResultCellClick}
                       isResult={true}
