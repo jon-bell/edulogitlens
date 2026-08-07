@@ -452,6 +452,25 @@ export function CausalMediationExplorer({
     });
   }, [resultData, stepsSettled]);
 
+  // Bring the LOADING state into view too, not just the finished result. An
+  // intervention takes tens of seconds, and its spinner sits below the two grids,
+  // past the fold — the same place the result was that pilot users didn't notice.
+  // Scrolling only on completion means the whole wait happens off screen, so the
+  // drag reads as having done nothing and gets retried on top of the request
+  // already in flight. Fires on the transition into pending, so it can't fight
+  // manual scrolling during the wait.
+  const pendingRef = useRef<HTMLDivElement>(null);
+  const isPendingVisible = isInterventionPending && !!intervention && !resultData;
+  const wasPendingRef = useRef(false);
+  useEffect(() => {
+    if (isPendingVisible && !wasPendingRef.current) {
+      requestAnimationFrame(() => {
+        pendingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+    wasPendingRef.current = isPendingVisible;
+  }, [isPendingVisible]);
+
   const resultPromptInput = useMemo<PromptInput | null>(
     () =>
       resultData
@@ -687,8 +706,9 @@ export function CausalMediationExplorer({
           </AnimatePresence>
 
           {/* Loading state: parent is running a backend call for the intervention. */}
-          {isInterventionPending && intervention && !resultData && (
+          {isPendingVisible && (
             <motion.div
+              ref={pendingRef}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
