@@ -245,6 +245,35 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     );
   const displayTokens = displayTokenIndices.map((i) => allTokens[i]);
 
+  // Which whitespace glyphs are actually on screen, so the key below only
+  // explains marks the reader can see. Scans the rendered cells and the rendered
+  // row labels — both go through formatTokenDisplay.
+  //
+  // Without a key, "␣Paris" and "↵" read as the tool's own formatting, or as
+  // noise. They are neither: whitespace is a token the model ranks like any
+  // other, and a predicted newline is the model saying the text is finished.
+  // Readers who don't know that report the widget as broken.
+  const visibleWhitespaceGlyphs = (() => {
+    const marks = { space: false, newline: false, tab: false };
+    const scan = (t: string | undefined) => {
+      if (!t) return;
+      if (t.includes(' ')) marks.space = true;
+      if (t.includes('\n')) marks.newline = true;
+      if (t.includes('\t')) marks.tab = true;
+    };
+    for (const tokenIdx of displayTokenIndices) {
+      scan(allTokens[tokenIdx]);
+      for (const layerIdx of displayLayerIndices) {
+        scan(prompt.data.data[tokenIdx]?.[layerIdx]?.token);
+      }
+    }
+    return marks;
+  })();
+  const hasWhitespaceGlyphs =
+    visibleWhitespaceGlyphs.space ||
+    visibleWhitespaceGlyphs.newline ||
+    visibleWhitespaceGlyphs.tab;
+
   // Measure the real rendered position of each cell row / cell column after
   // layout. getBoundingClientRect is used (not offsetTop/offsetLeft) for
   // sub-pixel accuracy; positions are taken relative to the content div, which
@@ -1207,7 +1236,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
               the gradient so the workbench's Tailwind JIT doesn't drop it. */}
           <div
             className="flex items-center px-4 pb-3 pt-1"
-            style={{ gap: 8 }}
+            style={{ gap: 8, flexWrap: 'wrap' }}
           >
             <span style={{ fontSize: 11, fontWeight: 500, color: '#374151' }}>
               Probability
@@ -1224,6 +1253,27 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             />
             <span style={{ fontSize: 10, color: '#6b7280' }}>1.0</span>
           </div>
+
+          {/* Whitespace key — only the marks currently on screen. Wraps rather
+              than squeezing the probability scale on a narrow card. */}
+          {hasWhitespaceGlyphs && (
+            <div
+              className="flex items-baseline px-4 pb-3"
+              style={{ gap: 8, flexWrap: 'wrap' }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 500, color: '#374151' }}>
+                Whitespace
+              </span>
+              {visibleWhitespaceGlyphs.space && <GlyphKey glyph="␣" label="space" />}
+              {visibleWhitespaceGlyphs.newline && <GlyphKey glyph="↵" label="new line" />}
+              {visibleWhitespaceGlyphs.tab && <GlyphKey glyph="⇥" label="tab" />}
+              <span style={{ fontSize: 10, color: '#6b7280', lineHeight: 1.4 }}>
+                These are predictions, not formatting: the model ranks a space or a
+                line break like any other token. A predicted line break means it
+                thinks the text is finished.
+              </span>
+            </div>
+          )}
         </div>
 
         {showSidebar && (
@@ -1233,6 +1283,25 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     </div>
   );
 };
+
+/** One entry of the whitespace key: the glyph as the grid draws it, then its name. */
+const GlyphKey: React.FC<{ glyph: string; label: string }> = ({ glyph, label }) => (
+  <span style={{ fontSize: 10, color: '#6b7280', whiteSpace: 'nowrap' }}>
+    <span
+      style={{
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        color: '#374151',
+        border: '1px solid #e5e7eb',
+        borderRadius: 2,
+        padding: '0 3px',
+        marginRight: 3,
+      }}
+    >
+      {glyph}
+    </span>
+    {label}
+  </span>
+);
 
 interface DropTargetCellProps {
   tokenPosition: number;

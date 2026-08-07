@@ -697,9 +697,18 @@ export function CausalMediationExplorer({
               role="status"
               aria-live="polite"
             >
+              {/* An intervention is a second forward pass with a hook, so it is
+                  routinely slower than the plain lens run that preceded it. Without
+                  a duration cue the wait reads as a hang, and the drag gets retried
+                  on top of the request already in flight. */}
               <div className="flex flex-col items-center gap-3 text-gray-500">
                 <Loader2 className="w-6 h-6 animate-spin" />
-                <p className="text-sm">Computing intervention&hellip;</p>
+                <div className="flex flex-col items-center gap-1">
+                  <p className="text-sm">Computing intervention&hellip;</p>
+                  <p className="text-xs text-gray-400">
+                    This usually takes 30&ndash;40 seconds &mdash; hang tight.
+                  </p>
+                </div>
               </div>
             </motion.div>
           )}
