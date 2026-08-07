@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { isSpecialToken } from './causalmediation/utils/formatToken';
 
 export interface LogitCell {
   token: string;
@@ -120,10 +121,20 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
     setSelectedCell(null); // Clear selection when step changes
   };
 
-  // Filter data based on step sizes, always including the last element
+  // Filter data based on step sizes, always including the last element. A leading
+  // BOS marker (<|begin_of_text|> / <s> / [CLS]) is dropped from the rows: it is a
+  // tokenizer artefact rather than text the reader wrote, and as the first row it
+  // read as the tool having mangled the prompt. Indices stay ABSOLUTE, so anything
+  // keyed on token position is unaffected — this is a rendering choice only. Never
+  // dropped when it is the only token, which would leave the grid with no rows.
+  const hideLeadingBos = data.tokens.length > 1 && isSpecialToken(data.tokens[0]);
   const filteredTokenIndices = data.tokens
     .map((_, idx) => idx)
-    .filter((idx) => idx % tokenStep === 0 || idx === data.tokens.length - 1);
+    .filter(
+      (idx) =>
+        !(hideLeadingBos && idx === 0) &&
+        (idx % tokenStep === 0 || idx === data.tokens.length - 1),
+    );
   const filteredTokens = filteredTokenIndices.map(idx => data.tokens[idx]);
   
   const filteredLayerIndices = data.layers

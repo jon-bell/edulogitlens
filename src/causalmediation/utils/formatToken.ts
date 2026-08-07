@@ -8,3 +8,22 @@
 export function formatTokenDisplay(token: string): string {
   return token.replace(/ /g, '␣').replace(/\n/g, '↵').replace(/\t/g, '⇥');
 }
+
+/**
+ * Whether a token is a tokenizer control marker rather than text the user wrote —
+ * `<|begin_of_text|>`, `<s>`, `[CLS]`, `<bos>` and friends.
+ *
+ * Used to hide a leading BOS row from the grid: it is a real position in the data
+ * and has to stay one, because interventions are addressed against the
+ * BOS-inclusive tokenization. So this only ever drives *rendering*, never indices.
+ */
+export function isSpecialToken(token: string | undefined): boolean {
+  if (!token) return false;
+  const t = token.trim();
+  return (
+    /^<\|.+\|>$/.test(t) ||
+    /^<\/?s>$/.test(t) ||
+    /^<bos>$/i.test(t) ||
+    /^\[(CLS|SEP|BOS)\]$/i.test(t)
+  );
+}

@@ -3,7 +3,7 @@ import { useDrop } from 'react-dnd';
 import { motion } from 'motion/react';
 import { PromptInput, SelectedCell } from '../types';
 import { HeatmapCell } from './HeatmapCell';
-import { formatTokenDisplay } from '../utils/formatToken';
+import { formatTokenDisplay, isSpecialToken } from '../utils/formatToken';
 import { FlowArrow } from './FlowArrow';
 import { VerticalFlowArrow } from './VerticalFlowArrow';
 
@@ -188,13 +188,19 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     setExpandedLayers(new Set());
   }, [layerStep]);
 
-  // Show all input tokens — including any leading BOS marker
-  // (<|begin_of_text|> / <s> / [CLS]) — so the CM heatmap's rows match the
-  // standard logit-lens widget (LogitLensGrid / nnsightful LogitLensWidget),
-  // which render the full input. displayTokenIndices keeps absolute indices so
-  // the tokenPosition handed to drag/drop interventions stays correct. The
-  // last token/layer is ALWAYS shown (the model's final prediction / output
+  // Show every input token EXCEPT a leading BOS marker (<|begin_of_text|> / <s> /
+  // [CLS]). That marker is a tokenizer artefact, not something the reader wrote,
+  // and as the grid's first row it reads as the tool having mangled the prompt.
+  //
+  // Hidden at render only: it stays position 0 in the data, because interventions
+  // are addressed against the BOS-inclusive tokenization (the backend indexes it
+  // absolutely). displayTokenIndices therefore keeps ABSOLUTE indices, so the
+  // tokenPosition handed to drag/drop is unaffected by hiding the row. Never drop
+  // it when it is the only token, or the grid would render no rows at all.
+  //
+  // The last token/layer is ALWAYS shown (the model's final prediction / output
   // layer), plus anything the user has expanded.
+  const hideLeadingBos = allTokens.length > 1 && isSpecialToken(allTokens[0]);
   // A spotlit cell is always rendered, whatever the downsampling. Snapping the
   // ring to the nearest *rendered* layer sounds harmless but isn't: at a coarse
   // layer step the nearest rendered layer is often the last one, and the last
@@ -238,10 +244,11 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     .map((_, idx) => idx)
     .filter(
       (idx) =>
-        idx % tokenStep === 0 ||
-        idx === allTokens.length - 1 ||
-        expandedTokens.has(idx) ||
-        spotlitTokenIndices.has(idx),
+        !(hideLeadingBos && idx === 0) &&
+        (idx % tokenStep === 0 ||
+          idx === allTokens.length - 1 ||
+          expandedTokens.has(idx) ||
+          spotlitTokenIndices.has(idx)),
     );
   const displayTokens = displayTokenIndices.map((i) => allTokens[i]);
 
