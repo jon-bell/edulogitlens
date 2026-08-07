@@ -195,15 +195,35 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   // the tokenPosition handed to drag/drop interventions stays correct. The
   // last token/layer is ALWAYS shown (the model's final prediction / output
   // layer), plus anything the user has expanded.
+  // A spotlit cell is always rendered, whatever the downsampling. Snapping the
+  // ring to the nearest *rendered* layer sounds harmless but isn't: at a coarse
+  // layer step the nearest rendered layer is often the last one, and the last
+  // column is where the answer is already fixed. A guided tutorial that rings a
+  // middle layer to say "patch here" would then point a participant at a cell
+  // whose patch changes nothing — worst at narrow widths, which is exactly where
+  // downsampling kicks in (two heatmaps side by side at 1366px leaves two
+  // columns, so every spotlight lands on the final layer).
+  const spotlitLayerIndices = new Set(
+    (spotlightCells ?? []).map((c) => allLayers.indexOf(c.layer)).filter((i) => i >= 0),
+  );
+  const spotlitTokenIndices = new Set(
+    (spotlightCells ?? []).map((c) => c.tokenPosition).filter((i) => i >= 0 && i < allTokens.length),
+  );
+
   const displayLayerIndices = allLayers
     .map((_, idx) => idx)
     .filter(
-      (idx) => idx % layerStep === 0 || idx === allLayers.length - 1 || expandedLayers.has(idx),
+      (idx) =>
+        idx % layerStep === 0 ||
+        idx === allLayers.length - 1 ||
+        expandedLayers.has(idx) ||
+        spotlitLayerIndices.has(idx),
     );
   const displayLayers = displayLayerIndices.map((i) => allLayers[i]);
 
-  // Snap each requested spotlight layer to the nearest rendered layer so the
-  // ring is visible even when the grid downsamples layers to fit.
+  // Still snap, but now only as a fallback: a spotlight naming a layer this
+  // prompt doesn't have (a host hard-coding a layer count) rings the closest one
+  // rather than nothing. An exact match is rendered above, so it snaps to itself.
   const snappedSpotlights =
     spotlightCells && displayLayers.length > 0
       ? spotlightCells.map((c) => ({
@@ -217,7 +237,11 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   const displayTokenIndices = allTokens
     .map((_, idx) => idx)
     .filter(
-      (idx) => idx % tokenStep === 0 || idx === allTokens.length - 1 || expandedTokens.has(idx),
+      (idx) =>
+        idx % tokenStep === 0 ||
+        idx === allTokens.length - 1 ||
+        expandedTokens.has(idx) ||
+        spotlitTokenIndices.has(idx),
     );
   const displayTokens = displayTokenIndices.map((i) => allTokens[i]);
 
