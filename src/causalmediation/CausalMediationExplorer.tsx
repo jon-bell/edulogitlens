@@ -410,6 +410,11 @@ export function CausalMediationExplorer({
   const lastEmittedResultTokenRef = useRef<string | null>(null);
   useEffect(() => {
     if (!resultData) {
+      // Report the disappearance, not just the arrival. A host that announces the
+      // patch outcome ("the target now predicts X") has no other way to learn the
+      // patched grid is gone — e.g. a fresh lens run replaces the patched run as
+      // the active one — and would keep describing a result no longer on screen.
+      if (lastEmittedResultTokenRef.current !== null) onInterventionResult?.(null);
       lastEmittedResultTokenRef.current = null;
       return;
     }
