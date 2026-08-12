@@ -1,6 +1,7 @@
 import React from 'react';
 import { useDrag } from 'react-dnd';
 import { motion } from 'motion/react';
+import { formatTokenDisplay } from '../utils/formatToken';
 
 interface HeatmapCellProps {
   tokenPosition: number;
@@ -14,11 +15,21 @@ interface HeatmapCellProps {
   isHighlighted?: boolean;
   onClick?: () => void;
   isIntervention?: boolean;
+  // Downstream of the patch: draws a purple border so a near-white
+  // low-probability cell is still visibly marked as tainted.
+  isTainted?: boolean;
+  taintColor?: string;
   animationDelay?: number;
   highlightRef?: (ref: HTMLDivElement | null) => void;
   width?: number;
   height?: number;
   fontSize?: number;
+  // When a cell is selected somewhere in this grid, every cell that is NOT
+  // in the row, column, or causal cone gets dimmed so the highlighted region
+  // pops. The actual row/column/cone tints are painted at GRID level (in
+  // HeatmapGrid) so they show through the gutters between cells; cells keep
+  // their probability backgrounds intact.
+  isOutsideCrosshair?: boolean;
 }
 
 function parseHex(hex: string): { r: number; g: number; b: number } {
@@ -54,11 +65,14 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
   isHighlighted = false,
   onClick,
   isIntervention = false,
+  isTainted = false,
+  taintColor = '#9333ea',
   animationDelay = 0,
   highlightRef,
   width = 72,
   height = 48,
   fontSize = 12,
+  isOutsideCrosshair = false,
 }) => {
   const [{ isDragging }, drag] = useDrag(
     () => ({
@@ -107,10 +121,14 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
           height,
           backgroundColor: bg,
           boxSizing: 'border-box',
-          border: isHighlighted
-            ? `2px solid ${baseColor}`
-            : `1px solid rgba(0,0,0,0.06)`,
-          outline: isSelected ? `2px solid #facc15` : 'none',
+          border: isTainted
+            ? `2px solid ${taintColor}`
+            : isHighlighted
+              ? `2px solid ${baseColor}`
+              : `1px solid rgba(0,0,0,0.06)`,
+          // Blue, not yellow: the previous #facc15 was the same hue family as
+          // the amber gap bands, so a selected cell was hard to distinguish.
+          outline: isSelected ? `2px solid #3b82f6` : 'none',
           outlineOffset: isSelected ? 1 : 0,
         }}
         initial={isIntervention ? { scale: 0.85, opacity: 0 } : false}
@@ -131,8 +149,18 @@ export const HeatmapCell: React.FC<HeatmapCellProps> = ({
           }}
           title={predictedToken}
         >
-          {predictedToken}
+          {formatTokenDisplay(predictedToken)}
         </span>
+
+        {/* Dim cells outside the row/column/cone so the highlighted region
+            pops. The actual region tints are painted at GRID level and
+            show through the gutters between cells. */}
+        {isOutsideCrosshair && (
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{ backgroundColor: 'rgba(255, 255, 255, 0.65)' }}
+          />
+        )}
       </motion.div>
     </div>
   );

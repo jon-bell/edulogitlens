@@ -3,16 +3,33 @@ import { useDrop } from 'react-dnd';
 import { motion } from 'motion/react';
 import { PromptInput, SelectedCell } from '../types';
 import { HeatmapCell } from './HeatmapCell';
+import { formatTokenDisplay, isSpecialToken } from '../utils/formatToken';
 import { FlowArrow } from './FlowArrow';
 import { VerticalFlowArrow } from './VerticalFlowArrow';
 
 const BASE_CELL_WIDTH = 72;
-const BASE_CELL_HEIGHT = 48;
-const BASE_HORIZ_ARROW_WIDTH = 28;
-const BASE_VERT_ARROW_HEIGHT = 16;
+// Compact rows: token rows are no longer downsampled (token-step is fixed at 1),
+// so keep them short enough that a full prompt fits without a wall of tall rows.
+const BASE_CELL_HEIGHT = 30;
+// Tighter than the original arrow gutters (28 / 16): keep a little negative
+// space between cells for the chevron, but pack the grid noticeably denser.
+const BASE_HORIZ_ARROW_WIDTH = 12;
+const BASE_VERT_ARROW_HEIGHT = 6;
 const BASE_TOKEN_COL_WIDTH = 80;
 const BASE_LABEL_FONT = 14;
 const BASE_CELL_FONT = 12;
+
+// Measured positions (px, relative to the inline-block content div) of every
+// rendered cell row and cell column. The highlight bands and the patched-cell
+// exclusion are painted from these MEASURED rects rather than arithmetic:
+// fractional cell sizes at non-100% zoom made index-multiplied math drift
+// further down the grid, so bands stopped sitting pixel-exact on their rows.
+interface OverlayGeom {
+  rowTops: number[];
+  rowHeights: number[];
+  colLefts: number[];
+  colWidths: number[];
+}
 
 interface HeatmapGridProps {
   prompt: PromptInput;
@@ -22,6 +39,13 @@ interface HeatmapGridProps {
   isDropTarget?: boolean;
   onDrop?: (item: any, targetTokenPos: number, targetLayer: number) => void;
   highlightCell?: { tokenPosition: number; layer: number };
+  // Guided-tutorial "Show me" pointer: rings these cells (distinct from the
+  // intervention highlight). Each layer resolves to the nearest rendered layer,
+  // so a downsampled grid still shows the ring near the requested depth. Takes a
+  // list because a patching hint wants both ends of the drag lit at once.
+  // A null tokenPosition names a layer only: the column is forced into view and
+  // scrolled to, but no cell is ringed.
+  spotlightCells?: { tokenPosition: number | null; layer: number }[];
   selectedCell?: SelectedCell | null;
   onCellClick?: (tokenPosition: number, layer: number) => void;
   isResult?: boolean;
@@ -30,6 +54,13 @@ interface HeatmapGridProps {
   onHighlightRefChange?: (ref: HTMLElement | null) => void;
   showSidebar?: boolean;
   sidebarContent?: React.ReactNode;
+  // Synced scrolling: when scrollState is provided the grid follows it
+  // (controlled); the grid also reports its own scroll via onScroll.
+  onScroll?: (state: { scrollLeft: number; scrollTop: number }) => void;
+  scrollState?: { scrollLeft: number; scrollTop: number } | null;
+  // When false, cells in this grid cannot be dragged (useful when single-prompt
+  // mode hides the target and there is nothing to drop on).
+  isSourceDraggable?: boolean;
 }
 
 export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
@@ -40,6 +71,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   isDropTarget = false,
   onDrop,
   highlightCell,
+  spotlightCells,
   selectedCell,
   onCellClick,
   isResult = false,
@@ -48,6 +80,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   onHighlightRefChange,
   showSidebar = false,
   sidebarContent,
+  onScroll,
+  scrollState,
+  isSourceDraggable = true,
 }) => {
   const scale = zoom / 100;
   const cellWidth = BASE_CELL_WIDTH * scale;
@@ -61,11 +96,32 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
   const [scrolledX, setScrolledX] = React.useState(false);
   const [scrolledY, setScrolledY] = React.useState(false);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  // Suppress re-emitting onScroll when we apply a controlled scrollState.
+  const ignoreNextScrollRef = React.useRef(false);
+  const isScrollControlled = scrollState !== undefined && scrollState !== null;
+
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollLeft } = e.currentTarget;
     setScrolledY(scrollTop > 0);
     setScrolledX(scrollLeft > 0);
+    if (ignoreNextScrollRef.current) {
+      ignoreNextScrollRef.current = false;
+      return;
+    }
+    onScroll?.({ scrollLeft, scrollTop });
   };
+
+  React.useEffect(() => {
+    if (!isScrollControlled || !scrollState) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollLeft === scrollState.scrollLeft && el.scrollTop === scrollState.scrollTop)
+      return;
+    ignoreNextScrollRef.current = true;
+    el.scrollLeft = scrollState.scrollLeft;
+    el.scrollTop = scrollState.scrollTop;
+  }, [isScrollControlled, scrollState?.scrollLeft, scrollState?.scrollTop, scrollState]);
 
   const scrolledBg = 'rgba(255,255,255,0.9)';
   // Solid neutral color for the continuous left-axis bar behind token labels.
@@ -103,15 +159,275 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   const allLayers = prompt.data.layers;
   const allTokens = prompt.data.tokens;
 
+  // Auto-fit downsamples rows/cols by tokenStep/layerStep to fit the viewport.
+  // Hidden tokens/layers between two shown ones are revealed by clicking the
+  // "⋯N" expander rendered in the chevron gutter between them; the indices a
+  // user expands are kept here and always rendered.
+  const [expandedTokens, setExpandedTokens] = React.useState<Set<number>>(new Set());
+  const [expandedLayers, setExpandedLayers] = React.useState<Set<number>>(new Set());
+
+  const expandTokenGap = (loIdx: number, hiIdx: number) =>
+    setExpandedTokens((prev) => {
+      const next = new Set(prev);
+      for (let i = loIdx + 1; i < hiIdx; i++) next.add(i);
+      return next;
+    });
+  const expandLayerGap = (loIdx: number, hiIdx: number) =>
+    setExpandedLayers((prev) => {
+      const next = new Set(prev);
+      for (let i = loIdx + 1; i < hiIdx; i++) next.add(i);
+      return next;
+    });
+
+  // When the step changes — via the toolbar or auto-fit recomputing — discard
+  // any manually-expanded gaps so the grid re-collapses to the new density.
+  // Each expansion set is tied to its own step so changing one doesn't reset
+  // the other.
+  React.useEffect(() => {
+    setExpandedTokens(new Set());
+  }, [tokenStep]);
+  React.useEffect(() => {
+    setExpandedLayers(new Set());
+  }, [layerStep]);
+
+  // Show every input token EXCEPT a leading BOS marker (<|begin_of_text|> / <s> /
+  // [CLS]). That marker is a tokenizer artefact, not something the reader wrote,
+  // and as the grid's first row it reads as the tool having mangled the prompt.
+  //
+  // Hidden at render only: it stays position 0 in the data, because interventions
+  // are addressed against the BOS-inclusive tokenization (the backend indexes it
+  // absolutely). displayTokenIndices therefore keeps ABSOLUTE indices, so the
+  // tokenPosition handed to drag/drop is unaffected by hiding the row. Never drop
+  // it when it is the only token, or the grid would render no rows at all.
+  //
+  // The last token/layer is ALWAYS shown (the model's final prediction / output
+  // layer), plus anything the user has expanded.
+  const hideLeadingBos = allTokens.length > 1 && isSpecialToken(allTokens[0]);
+  // A spotlit cell is always rendered, whatever the downsampling. Snapping the
+  // ring to the nearest *rendered* layer sounds harmless but isn't: at a coarse
+  // layer step the nearest rendered layer is often the last one, and the last
+  // column is where the answer is already fixed. A guided tutorial that rings a
+  // middle layer to say "patch here" would then point a participant at a cell
+  // whose patch changes nothing — worst at narrow widths, which is exactly where
+  // downsampling kicks in (two heatmaps side by side at 1366px leaves two
+  // columns, so every spotlight lands on the final layer).
+  const spotlitLayerIndices = new Set(
+    (spotlightCells ?? []).map((c) => allLayers.indexOf(c.layer)).filter((i) => i >= 0),
+  );
+  const spotlitTokenIndices = new Set(
+    (spotlightCells ?? [])
+      .map((c) => c.tokenPosition)
+      .filter((i): i is number => i != null && i >= 0 && i < allTokens.length),
+  );
+
   const displayLayerIndices = allLayers
     .map((_, idx) => idx)
-    .filter((idx) => idx % layerStep === 0 || idx === allLayers.length - 1);
+    .filter(
+      (idx) =>
+        idx % layerStep === 0 ||
+        idx === allLayers.length - 1 ||
+        expandedLayers.has(idx) ||
+        spotlitLayerIndices.has(idx),
+    );
   const displayLayers = displayLayerIndices.map((i) => allLayers[i]);
+
+  // Still snap, but now only as a fallback: a spotlight naming a layer this
+  // prompt doesn't have (a host hard-coding a layer count) rings the closest one
+  // rather than nothing. An exact match is rendered above, so it snaps to itself.
+  // Position-less entries produce nothing here — they force a column (above) but
+  // name no cell, so there is nothing to ring.
+  const snappedSpotlights =
+    spotlightCells && displayLayers.length > 0
+      ? spotlightCells
+          .filter((c): c is { tokenPosition: number; layer: number } => c.tokenPosition != null)
+          .map((c) => ({
+            tokenPosition: c.tokenPosition,
+            layer: displayLayers.reduce((best, lv) =>
+              Math.abs(lv - c.layer) < Math.abs(best - c.layer) ? lv : best,
+            ),
+          }))
+      : [];
 
   const displayTokenIndices = allTokens
     .map((_, idx) => idx)
-    .filter((idx) => idx % tokenStep === 0 || idx === allTokens.length - 1);
+    .filter(
+      (idx) =>
+        !(hideLeadingBos && idx === 0) &&
+        (idx % tokenStep === 0 ||
+          idx === allTokens.length - 1 ||
+          expandedTokens.has(idx) ||
+          spotlitTokenIndices.has(idx)),
+    );
   const displayTokens = displayTokenIndices.map((i) => allTokens[i]);
+
+  // Which whitespace glyphs are actually on screen, so the key below only
+  // explains marks the reader can see. Scans the rendered cells and the rendered
+  // row labels — both go through formatTokenDisplay.
+  //
+  // Without a key, "␣Paris" and "↵" read as the tool's own formatting, or as
+  // noise. They are neither: whitespace is a token the model ranks like any
+  // other, and a predicted newline is the model saying the text is finished.
+  // Readers who don't know that report the widget as broken.
+  const visibleWhitespaceGlyphs = (() => {
+    const marks = { space: false, newline: false, tab: false };
+    const scan = (t: string | undefined) => {
+      if (!t) return;
+      if (t.includes(' ')) marks.space = true;
+      if (t.includes('\n')) marks.newline = true;
+      if (t.includes('\t')) marks.tab = true;
+    };
+    for (const tokenIdx of displayTokenIndices) {
+      scan(allTokens[tokenIdx]);
+      for (const layerIdx of displayLayerIndices) {
+        scan(prompt.data.data[tokenIdx]?.[layerIdx]?.token);
+      }
+    }
+    return marks;
+  })();
+  const hasWhitespaceGlyphs =
+    visibleWhitespaceGlyphs.space ||
+    visibleWhitespaceGlyphs.newline ||
+    visibleWhitespaceGlyphs.tab;
+
+  // Measure the real rendered position of each cell row / cell column after
+  // layout. getBoundingClientRect is used (not offsetTop/offsetLeft) for
+  // sub-pixel accuracy; positions are taken relative to the content div, which
+  // makes them scroll-invariant. The equality guard stops the every-render
+  // layout effect from looping; the ResizeObserver catches layout shifts that
+  // happen without a React render (e.g. web-font load resizing the headers).
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const rowElsRef = React.useRef(new Map<number, HTMLElement>());
+  const colElsRef = React.useRef(new Map<number, HTMLElement>());
+  const [overlayGeom, setOverlayGeom] = React.useState<OverlayGeom | null>(null);
+
+  const measureOverlayGeom = React.useCallback(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const base = content.getBoundingClientRect();
+    const rowTops: number[] = [];
+    const rowHeights: number[] = [];
+    for (let d = 0; d < rowElsRef.current.size; d++) {
+      const el = rowElsRef.current.get(d);
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      rowTops.push(r.top - base.top);
+      rowHeights.push(r.height);
+    }
+    const colLefts: number[] = [];
+    const colWidths: number[] = [];
+    for (let j = 0; j < colElsRef.current.size; j++) {
+      const el = colElsRef.current.get(j);
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      colLefts.push(r.left - base.left);
+      colWidths.push(r.width);
+    }
+    setOverlayGeom((prev) => {
+      const next = { rowTops, rowHeights, colLefts, colWidths };
+      return prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    });
+  }, []);
+
+  React.useLayoutEffect(() => {
+    measureOverlayGeom();
+  });
+
+  React.useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const ro = new ResizeObserver(() => measureOverlayGeom());
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [measureOverlayGeom]);
+
+  // Bring a spotlit column (and its row) into view. Forcing the column to RENDER
+  // is not enough on its own: with two grids side by side in a 1366px window and
+  // a tutorial panel docked, each grid's column budget is ONE, so first + forced
+  // + last overflow the scroll container and the forced column sits past its
+  // right edge. That is how the fielded bug read — the tutorial rang a cell the
+  // participant could not see and had no reason to scroll for.
+  //
+  // Only this grid's own scroll container is touched, never an ancestor: a
+  // scrollIntoView here would also drag the page, yanking the tutorial panel and
+  // the other grid out from under the reader.
+  const spotlightKey = (spotlightCells ?? [])
+    .map((c) => `${c.layer}:${c.tokenPosition ?? '-'}`)
+    .join('|');
+  // Only a CHANGE of spotlight scrolls. Re-renders are constant here (hover,
+  // selection, a refetch handing back an equal-but-new data array), and scrolling
+  // on any of them would fight the participant every time they moved the grid.
+  // The window stays open for a beat after the change because the relayout it
+  // triggers — auto-fit reacting to the forced column with a new layerStep —
+  // lands a frame or two later and moves the column out from under the scroll
+  // already applied.
+  const spotlightSettleUntilRef = React.useRef(0);
+  const applySpotlightScroll = () => {
+    const sc = scrollRef.current;
+    const content = contentRef.current;
+    const first = (spotlightCells ?? [])[0];
+    if (!sc || !content || !first) return;
+    // Offsets are taken against the content div, the same scroll-invariant
+    // reference the overlay geometry uses.
+    const base = content.getBoundingClientRect();
+
+    // The exact column when this prompt has that layer (it is force-rendered
+    // above); otherwise the nearest rendered one, matching the ring's snap.
+    let colDispIdx = displayLayerIndices.indexOf(allLayers.indexOf(first.layer));
+    if (colDispIdx < 0 && displayLayers.length > 0) {
+      colDispIdx = displayLayers.reduce(
+        (best, lv, j) =>
+          Math.abs(lv - first.layer) < Math.abs(displayLayers[best] - first.layer) ? j : best,
+        0,
+      );
+    }
+    const colEl = colDispIdx >= 0 ? colElsRef.current.get(colDispIdx) : undefined;
+    if (colEl) {
+      // Centered, and centered in what is LEFT of the scroll port: the token
+      // label column is sticky and paints over the port's left edge, so a column
+      // scrolled under it is as invisible as one past the right edge. Both
+      // clamps matter when the port is narrower than the column (the result
+      // grid's sidebar can squeeze it to a sliver): centering then computes a
+      // scroll PAST the column, so fall back to butting it against the sticky
+      // column, which shows as much of it as the sliver allows.
+      const r = colEl.getBoundingClientRect();
+      const port = Math.max(0, sc.clientWidth - tokenColWidth);
+      const wanted = r.left - base.left - tokenColWidth - Math.max(0, port - r.width) / 2;
+      sc.scrollLeft = Math.max(0, Math.min(sc.scrollWidth - sc.clientWidth, wanted));
+    }
+
+    const rowDispIdx =
+      first.tokenPosition == null ? -1 : displayTokenIndices.indexOf(first.tokenPosition);
+    const rowEl = rowDispIdx >= 0 ? rowElsRef.current.get(rowDispIdx) : undefined;
+    if (rowEl) {
+      // Nearest edge vertically, not centered: rows are dense and usually all
+      // fit, so re-centering would shuffle the prompt for no gain. Only move when
+      // the row is outside the band the sticky layer-number header leaves.
+      const r = rowEl.getBoundingClientRect();
+      const top = r.top - base.top;
+      const headerH = Math.max(24, cellHeight * 0.6) + 8; // sticky layer row + mb-2
+      let wanted = sc.scrollTop;
+      if (top - headerH < sc.scrollTop) wanted = top - headerH;
+      else if (top + r.height > sc.scrollTop + sc.clientHeight)
+        wanted = top + r.height - sc.clientHeight;
+      sc.scrollTop = Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, wanted));
+    }
+  };
+
+  React.useLayoutEffect(() => {
+    // Empty key = the spotlight was cleared. Leave the scroll where the
+    // participant left it; snapping back to the origin loses their place.
+    if (!spotlightKey) return;
+    spotlightSettleUntilRef.current = Date.now() + 400;
+    applySpotlightScroll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotlightKey]);
+
+  // Re-apply while the window is open, so the relayout that the spotlight itself
+  // provoked doesn't leave the scroll pointing at where the column used to be.
+  React.useLayoutEffect(() => {
+    if (Date.now() > spotlightSettleUntilRef.current) return;
+    applySpotlightScroll();
+  });
 
   const isInterventionCell = (tokenPos: number, layerIdx: number): boolean => {
     if (!isResult || !interventionCell) return false;
@@ -125,9 +441,13 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     if (!interventionCell || !isResult) return false;
     const intLayerIdx = allLayers.indexOf(interventionCell.layer);
     const intTokenPos = interventionCell.tokenPosition;
+    // A patch at layer L only shows up at layer L+1 and deeper: at the patch
+    // token (carried forward through the residual stream) and at later tokens
+    // (read in via attention at the next layer). Cells in the SAME layer L are
+    // computed independently of the patch, so they keep their base color.
     return (
       (tokenPos === intTokenPos && layerIdx > intLayerIdx) ||
-      (tokenPos > intTokenPos && layerIdx >= intLayerIdx)
+      (tokenPos > intTokenPos && layerIdx > intLayerIdx)
     );
   };
 
@@ -151,6 +471,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden min-w-0 w-full">
+      {snappedSpotlights.length > 0 && (
+        <style>{`@keyframes elens-spotlight-pulse {
+          0%, 100% { box-shadow: 0 0 0 3px #2563eb, 0 0 12px 3px rgba(37,99,235,0.55); }
+          50% { box-shadow: 0 0 0 4px #2563eb, 0 0 18px 6px rgba(37,99,235,0.75); }
+        }`}</style>
+      )}
       <div className={showSidebar ? 'flex min-w-0 w-full' : 'w-full min-w-0'}>
         <div className={showSidebar ? 'flex-1 min-w-0' : 'w-full min-w-0'}>
           {/* Compact label strip */}
@@ -162,12 +488,267 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             />
           </div>
 
+          <div className="flex min-w-0 w-full">
+          {/* Y-axis title — OUTSIDE the scroll container so it stays visible
+              regardless of scroll, mirroring the "Layer" x-axis titles. Reads
+              bottom-to-top per the usual y-axis convention. */}
           <div
-            className="overflow-auto px-4 pb-4 w-full"
-            style={{ maxHeight: '60vh', position: 'relative' }}
+            className="shrink-0 flex items-center justify-center"
+            style={{
+              width: Math.max(20, axisTitleFontSize * 1.6),
+              writingMode: 'vertical-rl',
+              transform: 'rotate(180deg)',
+              textAlign: 'center',
+              fontSize: axisTitleFontSize,
+              fontWeight: 600,
+              color: '#4b5563',
+            }}
+          >
+            Tokens
+          </div>
+          <div
+            ref={scrollRef}
+            className="overflow-auto pr-4 pb-4 w-full min-w-0"
+            style={{
+              // Bumped from 60vh so autofit can pick more rows when fitting
+              // a large heatmap to the viewport; below this autofit kicks in
+              // and downsamples token/layer step.
+              maxHeight: '82vh',
+              position: 'relative',
+              scrollBehavior: isScrollControlled ? 'auto' : undefined,
+            }}
             onScroll={handleScroll}
           >
-            <div className="inline-block min-w-full pt-4">
+            <div
+              ref={contentRef}
+              className="inline-block min-w-full pt-4"
+              // `isolation: isolate` creates a new stacking context so the
+              // z-index:-1 overlay children below stay BEHIND the cells but
+              // do not escape upward through the white card background.
+              style={{ position: 'relative', isolation: 'isolate' }}
+            >
+              {(() => {
+                // Grid-level highlight overlays. Painted BEHIND the cells so
+                // they only show through the gutters/empty space around them
+                // — the cells' opaque probability backgrounds cover the tint
+                // where they sit. Layered in order: cone (largest), then
+                // column and row bands. Cells must have z-index >= 1 (set on
+                // their wrapper below) to sit above these.
+                const selHere =
+                  selectedCell?.promptId === prompt.id ? selectedCell : null;
+                if (!selHere || !overlayGeom) return null;
+                const selRowDispIdx = displayTokenIndices.indexOf(selHere.tokenPosition);
+                const selColDispIdx = displayLayerIndices.indexOf(allLayers.indexOf(selHere.layer));
+                if (selRowDispIdx < 0 || selColDispIdx < 0) return null;
+
+                // All geometry is MEASURED off the rendered rows/columns (see
+                // measureOverlayGeom) — bail for a frame if the measurement
+                // hasn't caught up with the current row/column set yet.
+                const { rowTops, rowHeights, colLefts, colWidths } = overlayGeom;
+                if (
+                  rowTops.length !== displayTokens.length ||
+                  colLefts.length !== displayLayers.length
+                ) {
+                  return null;
+                }
+
+                const gridTop = rowTops[0];
+                const gridLeft = colLefts[0];
+                const lastRowBottom =
+                  rowTops[rowTops.length - 1] + rowHeights[rowHeights.length - 1];
+                const lastColRight =
+                  colLefts[colLefts.length - 1] + colWidths[colWidths.length - 1];
+
+                // Half the measured gutter between a row/column and each
+                // neighbor — bands extend halfway into the arrow gutters.
+                const gapAbove = (d: number) =>
+                  d > 0 ? (rowTops[d] - (rowTops[d - 1] + rowHeights[d - 1])) / 2 : 0;
+                const gapBelow = (d: number) =>
+                  d < rowTops.length - 1
+                    ? (rowTops[d + 1] - (rowTops[d] + rowHeights[d])) / 2
+                    : 0;
+                const gapLeft = (j: number) =>
+                  j > 0 ? (colLefts[j] - (colLefts[j - 1] + colWidths[j - 1])) / 2 : 0;
+                const gapRight = (j: number) =>
+                  j < colLefts.length - 1
+                    ? (colLefts[j + 1] - (colLefts[j] + colWidths[j])) / 2
+                    : 0;
+
+                // Cone rectangle: top-left of grid down to bottom-right of
+                // selected cell.
+                const coneLeft = gridLeft;
+                const coneTop = gridTop;
+                const coneWidth =
+                  colLefts[selColDispIdx] + colWidths[selColDispIdx] - gridLeft;
+                const coneHeight =
+                  rowTops[selRowDispIdx] + rowHeights[selRowDispIdx] - gridTop;
+
+                // Column band spans every row at the selected column.
+                const colLeft = colLefts[selColDispIdx];
+                const colTop = gridTop;
+                const colHeight = lastRowBottom - gridTop;
+
+                // Row band spans every column at the selected row, with the
+                // vertical-arrow gutters above/below split 50/50 between
+                // adjacent rows.
+                const rowTop = rowTops[selRowDispIdx] - gapAbove(selRowDispIdx);
+                const rowHeight =
+                  rowHeights[selRowDispIdx] +
+                  gapAbove(selRowDispIdx) +
+                  gapBelow(selRowDispIdx);
+                const rowLeft = gridLeft;
+                const totalColsW = lastColRight - gridLeft;
+
+                const toRgb = (hex: string) => {
+                  const c = hex.replace('#', '');
+                  const full = c.length === 3 ? c.split('').map((x) => x + x).join('') : c;
+                  return {
+                    r: parseInt(full.slice(0, 2), 16),
+                    g: parseInt(full.slice(2, 4), 16),
+                    b: parseInt(full.slice(4, 6), 16),
+                  };
+                };
+                const pink = toRgb(prompt.color);
+                const purple = toRgb(blendColor || '#9333ea');
+                const rgba = (
+                  { r, g, b }: { r: number; g: number; b: number },
+                  a: number,
+                ) => `rgba(${r}, ${g}, ${b}, ${a})`;
+
+                // Affected-region anchor: cells strictly to the right of and
+                // at/below the intervention are "tainted" (the same rule as
+                // isCellAffected / the cell shading). On the result grid the
+                // highlight bands turn purple over that region and stay pink
+                // elsewhere; off the result grid affX/affY stay Infinity so the
+                // whole highlight is pink, unchanged.
+                let affX = Infinity;
+                let affY = Infinity;
+                if (isResult && interventionCell) {
+                  const intLayerIdx = allLayers.indexOf(interventionCell.layer);
+                  const jStar = displayLayerIndices.findIndex((li) => li > intLayerIdx);
+                  const dStar = displayTokenIndices.findIndex(
+                    (ti) => ti >= interventionCell.tokenPosition,
+                  );
+                  if (jStar >= 0) affX = colLefts[jStar];
+                  if (dStar >= 0) affY = rowTops[dStar];
+                }
+
+                const overlayBase: React.CSSProperties = {
+                  position: 'absolute',
+                  pointerEvents: 'none',
+                  // z-index -1 keeps the overlays below the parent's static-
+                  // flow children (cells, gutters, chevrons) while still being
+                  // visible because the parent has no background fill.
+                  zIndex: -1,
+                };
+
+                // Split a highlight band into a purple part (the affected
+                // bottom-right quadrant beyond affX/affY) and pink parts (the
+                // rest), so each band is purple exactly where its cells are.
+                const splitBand = (
+                  left: number,
+                  top: number,
+                  width: number,
+                  height: number,
+                  alpha: number,
+                ) => {
+                  const right = left + width;
+                  const bottom = top + height;
+                  const cutX = Math.min(Math.max(affX, left), right);
+                  const cutY = Math.min(Math.max(affY, top), bottom);
+                  const parts: {
+                    left: number;
+                    top: number;
+                    width: number;
+                    height: number;
+                    color: string;
+                  }[] = [];
+                  if (right > cutX && bottom > cutY) {
+                    parts.push({ left: cutX, top: cutY, width: right - cutX, height: bottom - cutY, color: rgba(purple, alpha) });
+                  }
+                  if (cutX > left) {
+                    parts.push({ left, top, width: cutX - left, height, color: rgba(pink, alpha) });
+                  }
+                  if (right > cutX && cutY > top) {
+                    parts.push({ left: cutX, top, width: right - cutX, height: cutY - top, color: rgba(pink, alpha) });
+                  }
+                  return parts;
+                };
+
+                // This tint (z-index -1) now sits ABOVE the amber gap bands
+                // (z-index -2) and below the cells, so the blue/pink paints over
+                // the amber for clear definition. Opacities are strong so the
+                // highlight reads distinctly over the amber.
+                const bands = [
+                  ...splitBand(coneLeft, coneTop, coneWidth, coneHeight, 0.32),
+                  ...splitBand(colLeft, colTop, colWidths[selColDispIdx], colHeight, 0.6),
+                  ...splitBand(rowLeft, rowTop, totalColsW, rowHeight, 0.6),
+                ];
+
+                // "No background around the patched cell": paint an opaque
+                // white rect over the bands covering the intervention cell
+                // plus a half-gutter ring around it, so the patched cell
+                // floats on the plain card background instead of sitting
+                // inside the pink/purple tint. Same z-index -1 layer, painted
+                // AFTER the bands so it wins where they overlap (the card
+                // background is white, so it reads as "no background").
+                let exclusion: {
+                  left: number;
+                  top: number;
+                  width: number;
+                  height: number;
+                } | null = null;
+                if (isResult && interventionCell) {
+                  const intRow = displayTokenIndices.indexOf(interventionCell.tokenPosition);
+                  const intCol = displayLayerIndices.indexOf(
+                    allLayers.indexOf(interventionCell.layer),
+                  );
+                  if (intRow >= 0 && intCol >= 0) {
+                    // At grid edges (no neighbor on one side) mirror the
+                    // opposite gap so the ring stays visually even.
+                    const ringAbove = gapAbove(intRow) || gapBelow(intRow);
+                    const ringBelow = gapBelow(intRow) || gapAbove(intRow);
+                    const ringLeft = gapLeft(intCol) || gapRight(intCol);
+                    const ringRight = gapRight(intCol) || gapLeft(intCol);
+                    exclusion = {
+                      left: colLefts[intCol] - ringLeft,
+                      top: rowTops[intRow] - ringAbove,
+                      width: colWidths[intCol] + ringLeft + ringRight,
+                      height: rowHeights[intRow] + ringAbove + ringBelow,
+                    };
+                  }
+                }
+
+                return (
+                  <>
+                    {bands.map((b, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          ...overlayBase,
+                          left: b.left,
+                          top: b.top,
+                          width: b.width,
+                          height: b.height,
+                          backgroundColor: b.color,
+                        }}
+                      />
+                    ))}
+                    {exclusion && (
+                      <div
+                        style={{
+                          ...overlayBase,
+                          left: exclusion.left,
+                          top: exclusion.top,
+                          width: exclusion.width,
+                          height: exclusion.height,
+                          backgroundColor: '#ffffff',
+                        }}
+                      />
+                    )}
+                  </>
+                );
+              })()}
               {/* X-axis title (top) — scrolls with content, not sticky */}
               <div className="flex items-center mb-1">
                 <div className="shrink-0" style={{ width: tokenColWidth }} />
@@ -180,7 +761,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                     color: '#4b5563',
                   }}
                 >
-                  Layer
+                  Layer (Step: {layerStep})
                 </div>
               </div>
               {/* Sticky layer-number row at top */}
@@ -238,9 +819,21 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 const nextTokenPos = !isLastDisplayRow
                   ? displayTokenIndices[displayRowIdx + 1]
                   : null;
+                // Hidden token rows collapsed between this row and the next.
+                const hiddenRows =
+                  nextTokenPos != null ? nextTokenPos - tokenPos - 1 : 0;
                 return (
                   <div key={tokenPos}>
-                    <div className="flex items-center mb-2">
+                    <div
+                      // No bottom margin: the row header is exactly the cell
+                      // height, and the only vertical gap between rows is the
+                      // minimal chevron (vertical-flow-arrow) strip below.
+                      className="flex items-center"
+                      ref={(el) => {
+                        if (el) rowElsRef.current.set(displayRowIdx, el);
+                        else rowElsRef.current.delete(displayRowIdx);
+                      }}
+                    >
                       <div
                         className="shrink-0 pr-3 text-right font-medium text-gray-700 truncate"
                         style={{
@@ -253,7 +846,17 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                         }}
                         title={tokenText}
                       >
-                        {tokenText}
+                        {tokenText.trim() === '' ? (
+                          // Whitespace-only tokens (e.g. a trailing " ") would
+                          // render invisibly, making the row look unlabeled /
+                          // "missing". Muted so the marker reads as "space",
+                          // not as literal text. Raw token stays in the title.
+                          <span className="text-gray-400">
+                            {formatTokenDisplay(tokenText || ' ')}
+                          </span>
+                        ) : (
+                          formatTokenDisplay(tokenText)
+                        )}
                       </div>
 
                       {displayLayers.map((layerValue, displayColIdx) => {
@@ -270,9 +873,37 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                           highlightCell?.tokenPosition === tokenPos &&
                           highlightCell?.layer === layerValue;
 
+                        const isSpotlit = snappedSpotlights.some(
+                          (s) => s.tokenPosition === tokenPos && s.layer === layerValue,
+                        );
+
                         const baseColor = getBaseColor(tokenPos, layerIdx);
                         const isIntervention = isInterventionCell(tokenPos, layerIdx);
+                        // Downstream of the patch: gets a purple border so a
+                        // near-white low-probability cell is still marked tainted.
+                        const isTainted = isCellAffected(tokenPos, layerIdx);
                         const animationDelay = getAnimationDelay(tokenPos, layerIdx);
+
+                        // Crosshair + causal cone (only for the grid that
+                        // owns the selected cell):
+                        //   * column = this layer's parallel output
+                        //   * row    = this token's depth trajectory
+                        //   * cone   = strictly earlier layers, equal-or-
+                        //              earlier positions: the cells whose
+                        //              outputs were actually available to
+                        //              compute the selected cell under the
+                        //              causal mask.
+                        // Cells outside ALL three get dimmed.
+                        const selHere =
+                          selectedCell?.promptId === prompt.id ? selectedCell : null;
+                        const inColumn = !!selHere && layerValue === selHere.layer;
+                        const inRow = !!selHere && tokenPos === selHere.tokenPosition;
+                        const inCone =
+                          !!selHere &&
+                          layerValue < selHere.layer &&
+                          tokenPos <= selHere.tokenPosition;
+                        const isOutsideCrosshair =
+                          !!selHere && !inColumn && !inRow && !inCone;
 
                         const nextLayerIdx =
                           displayColIdx < displayLayers.length - 1
@@ -288,6 +919,16 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                             style={{ flexShrink: 0 }}
                           >
                             <div
+                              // Column geometry is measured off the first
+                              // rendered row's cell wrappers.
+                              ref={
+                                displayRowIdx === 0
+                                  ? (el) => {
+                                      if (el) colElsRef.current.set(displayColIdx, el);
+                                      else colElsRef.current.delete(displayColIdx);
+                                    }
+                                  : undefined
+                              }
                               style={{
                                 width: cellWidth,
                                 height: cellHeight,
@@ -295,6 +936,16 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
+                                ...(isSpotlit
+                                  ? {
+                                      position: 'relative',
+                                      zIndex: 6,
+                                      borderRadius: 6,
+                                      boxShadow:
+                                        '0 0 0 3px #2563eb, 0 0 12px 3px rgba(37,99,235,0.55)',
+                                      animation: 'elens-spotlight-pulse 1.4s ease-in-out infinite',
+                                    }
+                                  : {}),
                               }}
                             >
                               {isDropTarget ? (
@@ -303,7 +954,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   layer={layerValue}
                                   predictedToken={cell.token}
                                   probability={cell.probability}
-                                  baseColor={prompt.color}
+                                  baseColor={baseColor}
                                   promptId={prompt.id}
                                   onDrop={onDrop}
                                   isHighlighted={isHighlight}
@@ -314,6 +965,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
+                                  isOutsideCrosshair={isOutsideCrosshair}
                                 />
                               ) : (
                                 <HeatmapCell
@@ -323,73 +975,227 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   probability={cell.probability}
                                   baseColor={baseColor}
                                   promptId={prompt.id}
-                                  isDraggable={!isDropTarget && !isResult}
+                                  isDraggable={!isDropTarget && !isResult && isSourceDraggable}
                                   isSelected={isSelected}
                                   isHighlighted={isHighlight}
                                   isIntervention={isIntervention}
+                                  isTainted={isTainted}
+                                  taintColor={blendColor}
                                   onClick={() => onCellClick?.(tokenPos, layerValue)}
                                   animationDelay={animationDelay}
                                   highlightRef={isHighlight ? onHighlightRefChange : undefined}
                                   width={cellWidth}
                                   height={cellHeight}
                                   fontSize={cellFontSize}
+                                  isOutsideCrosshair={isOutsideCrosshair}
                                 />
                               )}
                             </div>
 
-                            {displayColIdx < displayLayers.length - 1 && !nextIsIntervention && (
-                              <div
-                                style={{
-                                  width: horizArrowWidth,
-                                  flexShrink: 0,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                }}
-                              >
-                                <FlowArrow color={baseColor} opacity={0.9} />
-                              </div>
-                            )}
-                            {displayColIdx < displayLayers.length - 1 && nextIsIntervention && (
-                              <div style={{ width: horizArrowWidth, flexShrink: 0 }} />
-                            )}
+                            {(() => {
+                              if (displayColIdx >= displayLayers.length - 1) return null;
+                              const hiddenLayers =
+                                displayLayerIndices[displayColIdx + 1] - layerIdx - 1;
+                              // Collapsed-cols expander: clickable "⋮" in the
+                              // gutter when auto-fit hid layers between this col
+                              // and the next. Clicking reveals those layers.
+                              if (hiddenLayers > 0) {
+                                // Amber break-band: collapsed layers need a
+                                // loud cue, not a faint dashed line. The whole
+                                // gutter is an amber, clickable column with a
+                                // vertical "⋯N" count label; clicking reveals
+                                // the hidden layers.
+                                return (
+                                  <button
+                                    type="button"
+                                    data-testid="layer-gap-expander"
+                                    title={`${hiddenLayers} hidden layer${hiddenLayers > 1 ? 's' : ''} — click to expand`}
+                                    onClick={() =>
+                                      expandLayerGap(layerIdx, displayLayerIndices[displayColIdx + 1])
+                                    }
+                                    className="shrink-0 flex items-center justify-center bg-amber-300/40 hover:bg-amber-300/60 transition-colors"
+                                    style={{
+                                      width: horizArrowWidth,
+                                      height: cellHeight,
+                                      position: 'relative',
+                                      cursor: 'pointer',
+                                      border: 'none',
+                                      padding: 0,
+                                    }}
+                                  >
+                                    <div
+                                      aria-hidden="true"
+                                      style={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        bottom: 0,
+                                        left: '50%',
+                                        borderLeft: '1px dashed #d97706',
+                                        pointerEvents: 'none',
+                                      }}
+                                    />
+                                    <span
+                                      style={{
+                                        position: 'relative',
+                                        writingMode: 'vertical-rl',
+                                        fontSize: 10,
+                                        fontWeight: 600,
+                                        lineHeight: 1,
+                                        color: '#78350f',
+                                        backgroundColor: 'inherit',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      {`⋯${hiddenLayers}`}
+                                    </span>
+                                  </button>
+                                );
+                              }
+                              if (nextIsIntervention) {
+                                return <div style={{ width: horizArrowWidth, flexShrink: 0 }} />;
+                              }
+                              return (
+                                <div
+                                  style={{
+                                    width: horizArrowWidth,
+                                    flexShrink: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                  }}
+                                >
+                                  <FlowArrow color={baseColor} opacity={0.9} />
+                                </div>
+                              );
+                            })()}
                           </div>
                         );
                       })}
                     </div>
 
-                    {/* Vertical arrow gutter row: a narrow row of height vertArrowHeight
-                        between adjacent token rows. Structure mirrors the token row:
-                        sticky-left spacer of tokenColWidth, then one cellWidth-wide
-                        arrow container per layer, with horizArrowWidth spacers between.
-                        Each arrow container centers the small arrow glyph. The row is
-                        pointer-events: none since arrows are decorative. */}
+                    {/* Vertical arrow gutter row between adjacent token rows.
+                        Structure mirrors the token row: sticky-left column of
+                        tokenColWidth, then one cellWidth-wide arrow container per
+                        layer, with horizArrowWidth spacers between. The chevrons
+                        ALWAYS render. When auto-fit hid token rows in this gap
+                        (hiddenRows > 0) we additionally draw a dashed break-line
+                        behind the chevrons and put a clickable "... N (hidden)"
+                        label in the sticky-left column to reveal them. */}
                     {!isLastDisplayRow && nextTokenPos != null && (
                       <div
                         className="flex items-center"
                         style={{
                           marginBottom: 8,
+                          position: 'relative',
+                          // Arrows are decorative; only the count button (when
+                          // collapsed) is interactive — it re-enables pointers.
                           pointerEvents: 'none',
                         }}
                       >
-                        {/* Left spacer matching sticky token-label column */}
+                        {/* Amber break-band behind the chevrons, only when this
+                            gap hides rows. Spans from the token column to the
+                            end, and extends ~5px into the row margins above and
+                            below (visual overflow only — layout heights stay
+                            uniform so the two grids' rows keep aligning). The
+                            whole band is clickable to expand the hidden rows. */}
+                        {hiddenRows > 0 && (
+                          <button
+                            type="button"
+                            aria-hidden="true"
+                            tabIndex={-1}
+                            title={`${hiddenRows} hidden token${hiddenRows > 1 ? 's' : ''} — click to expand`}
+                            onClick={() => expandTokenGap(tokenPos, nextTokenPos as number)}
+                            className="bg-amber-300/40 hover:bg-amber-300/60 transition-colors"
+                            style={{
+                              position: 'absolute',
+                              left: tokenColWidth,
+                              right: 0,
+                              top: -5,
+                              bottom: -5,
+                              border: 'none',
+                              padding: 0,
+                              cursor: 'pointer',
+                              pointerEvents: 'auto',
+                              // Below the crosshair/cone highlight (z-index -1) so
+                              // the blue paints OVER the amber where they cross,
+                              // giving the highlight clear definition. Still above
+                              // the card background, and clickable (the highlight
+                              // overlays are pointer-events: none).
+                              zIndex: -2,
+                            }}
+                          >
+                            <div
+                              aria-hidden="true"
+                              style={{
+                                position: 'absolute',
+                                left: 0,
+                                right: 0,
+                                top: '50%',
+                                borderTop: '1px dashed #d97706',
+                                pointerEvents: 'none',
+                              }}
+                            />
+                          </button>
+                        )}
+                        {/* Sticky-left column: a clickable count label when this
+                            gap is collapsed, otherwise an empty spacer. */}
                         <div
-                          className="shrink-0"
+                          className="shrink-0 flex items-center"
                           style={{
                             width: tokenColWidth,
                             height: vertArrowHeight,
                             position: 'sticky',
                             left: 0,
-                            zIndex: 1,
+                            zIndex: 2,
                             ...stickyLeftShadow,
                           }}
-                        />
+                        >
+                          {hiddenRows > 0 && (
+                            <button
+                              type="button"
+                              data-testid="token-gap-expander"
+                              title={`${hiddenRows} hidden token${hiddenRows > 1 ? 's' : ''} — click to expand`}
+                              onClick={() => expandTokenGap(tokenPos, nextTokenPos as number)}
+                              className="bg-amber-300/40 hover:bg-amber-300/60 text-amber-900 transition-colors"
+                              style={{
+                                position: 'absolute',
+                                left: 0,
+                                right: 0,
+                                top: -5,
+                                bottom: -5,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'flex-end',
+                                fontSize: 10,
+                                fontWeight: 600,
+                                lineHeight: 1,
+                                whiteSpace: 'nowrap',
+                                paddingLeft: 4,
+                                paddingRight: 8,
+                                cursor: 'pointer',
+                                border: 'none',
+                                pointerEvents: 'auto',
+                              }}
+                            >
+                              {`⋯ ${hiddenRows} hidden`}
+                            </button>
+                          )}
+                        </div>
                         {displayLayers.map((layerValue, displayColIdx) => {
                           const layerIdx = displayLayerIndices[displayColIdx];
                           const suppressIncomingVertical =
                             isResult &&
                             interventionCell != null &&
                             nextTokenPos === interventionCell.tokenPosition &&
+                            layerValue === interventionCell.layer;
+                          // Also drop the chevron LEAVING the patch target
+                          // downward: a patch doesn't propagate to the next
+                          // token within the same layer (that happens one layer
+                          // deeper), so a same-layer down arrow is misleading.
+                          const suppressOutgoingVertical =
+                            isResult &&
+                            interventionCell != null &&
+                            tokenPos === interventionCell.tokenPosition &&
                             layerValue === interventionCell.layer;
                           // Color by origin cell, mirroring the horizontal arrow.
                           // Coloring by destination made arrows from unaffected
@@ -401,6 +1207,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                             <div
                               key={`varrow-${tokenPos}-${layerValue}`}
                               className="flex items-center"
+                              // Sit above the dashed break-line (zIndex 0) so the
+                              // chevrons render over it, not under it.
+                              style={{ position: 'relative', zIndex: 1 }}
                             >
                               <div
                                 style={{
@@ -411,7 +1220,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   justifyContent: 'center',
                                 }}
                               >
-                                {suppressIncomingVertical ? (
+                                {suppressIncomingVertical || suppressOutgoingVertical ? (
                                   <div
                                     style={{
                                       width: cellWidth,
@@ -427,11 +1236,33 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                               </div>
                               {displayColIdx < displayLayers.length - 1 && (
                                 <div
+                                  // Continue the amber collapsed-layers column
+                                  // through this gutter row so the break-band
+                                  // reads as one continuous vertical sweep.
+                                  className={
+                                    displayLayerIndices[displayColIdx + 1] - layerIdx - 1 > 0
+                                      ? 'bg-amber-300/40'
+                                      : undefined
+                                  }
                                   style={{
                                     width: horizArrowWidth,
                                     height: vertArrowHeight,
+                                    position: 'relative',
                                   }}
-                                />
+                                >
+                                  {displayLayerIndices[displayColIdx + 1] - layerIdx - 1 > 0 && (
+                                    <div
+                                      aria-hidden="true"
+                                      style={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        bottom: 0,
+                                        left: '50%',
+                                        borderLeft: '1px dashed #d97706',
+                                      }}
+                                    />
+                                  )}
+                                </div>
                               )}
                             </div>
                           );
@@ -493,11 +1324,12 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                     color: '#4b5563',
                   }}
                 >
-                  Layer
+                  Layer (Step: {layerStep})
                 </div>
               </div>
 
             </div>
+          </div>
           </div>
 
           {/* Probability color-scale legend — below the scroll container,
@@ -508,7 +1340,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
               the gradient so the workbench's Tailwind JIT doesn't drop it. */}
           <div
             className="flex items-center px-4 pb-3 pt-1"
-            style={{ gap: 8 }}
+            style={{ gap: 8, flexWrap: 'wrap' }}
           >
             <span style={{ fontSize: 11, fontWeight: 500, color: '#374151' }}>
               Probability
@@ -525,6 +1357,27 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             />
             <span style={{ fontSize: 10, color: '#6b7280' }}>1.0</span>
           </div>
+
+          {/* Whitespace key — only the marks currently on screen. Wraps rather
+              than squeezing the probability scale on a narrow card. */}
+          {hasWhitespaceGlyphs && (
+            <div
+              className="flex items-baseline px-4 pb-3"
+              style={{ gap: 8, flexWrap: 'wrap' }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 500, color: '#374151' }}>
+                Whitespace
+              </span>
+              {visibleWhitespaceGlyphs.space && <GlyphKey glyph="␣" label="space" />}
+              {visibleWhitespaceGlyphs.newline && <GlyphKey glyph="↵" label="new line" />}
+              {visibleWhitespaceGlyphs.tab && <GlyphKey glyph="⇥" label="tab" />}
+              <span style={{ fontSize: 10, color: '#6b7280', lineHeight: 1.4 }}>
+                These are predictions, not formatting: the model ranks a space or a
+                line break like any other token. A predicted line break means it
+                thinks the text is finished.
+              </span>
+            </div>
+          )}
         </div>
 
         {showSidebar && (
@@ -534,6 +1387,25 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     </div>
   );
 };
+
+/** One entry of the whitespace key: the glyph as the grid draws it, then its name. */
+const GlyphKey: React.FC<{ glyph: string; label: string }> = ({ glyph, label }) => (
+  <span style={{ fontSize: 10, color: '#6b7280', whiteSpace: 'nowrap' }}>
+    <span
+      style={{
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        color: '#374151',
+        border: '1px solid #e5e7eb',
+        borderRadius: 2,
+        padding: '0 3px',
+        marginRight: 3,
+      }}
+    >
+      {glyph}
+    </span>
+    {label}
+  </span>
+);
 
 interface DropTargetCellProps {
   tokenPosition: number;
@@ -551,6 +1423,7 @@ interface DropTargetCellProps {
   width: number;
   height: number;
   fontSize: number;
+  isOutsideCrosshair?: boolean;
 }
 
 const DropTargetCell: React.FC<DropTargetCellProps> = ({
@@ -569,6 +1442,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
   width,
   height,
   fontSize,
+  isOutsideCrosshair,
 }) => {
   const [{ isOver, canDrop }, drop] = useDrop(
     () => ({
@@ -612,6 +1486,7 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           width={width}
           height={height}
           fontSize={fontSize}
+          isOutsideCrosshair={isOutsideCrosshair}
         />
       </motion.div>
     </div>

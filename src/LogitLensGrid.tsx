@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { isSpecialToken } from './causalmediation/utils/formatToken';
 
 export interface LogitCell {
   token: string;
@@ -120,10 +121,20 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
     setSelectedCell(null); // Clear selection when step changes
   };
 
-  // Filter data based on step sizes, always including the last element
+  // Filter data based on step sizes, always including the last element. A leading
+  // BOS marker (<|begin_of_text|> / <s> / [CLS]) is dropped from the rows: it is a
+  // tokenizer artefact rather than text the reader wrote, and as the first row it
+  // read as the tool having mangled the prompt. Indices stay ABSOLUTE, so anything
+  // keyed on token position is unaffected — this is a rendering choice only. Never
+  // dropped when it is the only token, which would leave the grid with no rows.
+  const hideLeadingBos = data.tokens.length > 1 && isSpecialToken(data.tokens[0]);
   const filteredTokenIndices = data.tokens
     .map((_, idx) => idx)
-    .filter((idx) => idx % tokenStep === 0 || idx === data.tokens.length - 1);
+    .filter(
+      (idx) =>
+        !(hideLeadingBos && idx === 0) &&
+        (idx % tokenStep === 0 || idx === data.tokens.length - 1),
+    );
   const filteredTokens = filteredTokenIndices.map(idx => data.tokens[idx]);
   
   const filteredLayerIndices = data.layers
@@ -547,12 +558,7 @@ export function LogitLensGrid({ data }: LogitLensGridProps) {
 
       {/* Token Generation overlay - covers entire component */}
       <AnimatePresence>
-        {(() => {
-          // #region agent log
-          if (typeof fetch !== 'undefined') { fetch('http://127.0.0.1:7244/ingest/fc915240-872e-4c1a-aef6-bf81d338a109',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LogitLensGrid.tsx:gen-panel',message:'Generation panel visibility',data:{showGeneration,isValidSelection:!!isValidSelection,selectedCell:selectedCell??null,filteredLayerAtCol:selectedCell!=null?filteredLayerIndices[selectedCell.col]:null,filteredTokenAtRow:selectedCell!=null?filteredTokenIndices[selectedCell.row]:null},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{}); }
-          // #endregion
-          return showGeneration && isValidSelection && selectedCell;
-        })() && (
+        {showGeneration && isValidSelection && selectedCell && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}

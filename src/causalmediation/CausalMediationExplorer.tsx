@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { HeatmapGrid } from './components/HeatmapGrid';
@@ -6,7 +6,9 @@ import { HeatmapToolbar } from './components/HeatmapToolbar';
 import { TokenPredictionPanel } from './components/TokenPredictionPanel';
 import { ResultSidebar } from './components/ResultSidebar';
 import { CurvedPatchArrow } from './components/CurvedPatchArrow';
-import { PromptInput, Intervention, SelectedCell } from './types';
+import { PromptInput, Intervention, SelectedCell, CausalMediationEvent } from './types';
+import { formatTokenDisplay } from './utils/formatToken';
+import { useSpotlight } from './SpotlightContext';
 import type { LogitLensData } from '../LogitLensGrid';
 import { createMockLogitLensData, generateInterventionResult } from './utils/mockData';
 import { motion, AnimatePresence } from 'motion/react';
@@ -28,7 +30,26 @@ interface CausalMediationExplorerProps {
   targetData?: LogitLensData;
   onIntervention?: (i: Intervention) => Promise<LogitLensData | null> | void;
   resultData?: LogitLensData | null;
+  // Controlled intervention: when provided, the parent owns the patch spec
+  // (e.g. a persisted/restored patch), so the cone + arrow + result grid redraw
+  // without a live drag. undefined = uncontrolled (the internal drag state drives).
+  intervention?: Intervention | null;
+  // Called when the user clicks "Reset Intervention". Lets a controlling parent
+  // drop its persisted spec; without it a controlled intervention would re-supply.
+  onResetIntervention?: () => void;
   isInterventionPending?: boolean;
+  // Optional analytics hook: fired on discrete in-chart interactions (cell
+  // expand, result-cell expand, token/layer step changes). Coordinates only,
+  // no token text. Purely observational — does not affect widget behavior.
+  onEvent?: (event: CausalMediationEvent) => void;
+  // Optional: reports the target's post-patch top predicted token — the
+  // last-position, final-layer output shown in the result grid — whenever a
+  // result becomes available (live drop or restored/controlled resultData), and
+  // again if a re-patch changes it. Deliberately separate from `onEvent`: this
+  // carries the model's predicted token (never participant text), for a host
+  // that scores an activity against the patch outcome (e.g. a guided tutorial
+  // asking "what did the target produce after the patch?"). Purely observational.
+  onInterventionResult?: (finalToken: string | null) => void;
 }
 
 export function CausalMediationExplorer({
@@ -38,7 +59,11 @@ export function CausalMediationExplorer({
   targetData,
   onIntervention,
   resultData: controlledResultData,
+  intervention: controlledIntervention,
+  onResetIntervention,
   isInterventionPending = false,
+  onEvent,
+  onInterventionResult,
 }: CausalMediationExplorerProps = {}) {
   const sourcePrompt = useMemo<PromptInput>(
     () => ({
@@ -50,6 +75,11 @@ export function CausalMediationExplorer({
     [sourceData, sourcePromptText],
   );
 
+  // Single-prompt mode: when the target text is blank, hide the target grid
+  // and the entire intervention flow (drag/drop, curved arrow, result panel).
+  // CM Intro degrades gracefully into a lens viewer for just the source.
+  const isSinglePromptMode = !targetPromptText || targetPromptText.trim().length === 0;
+
   const targetPrompt = useMemo<PromptInput>(
     () => ({
       id: 'target',
@@ -60,12 +90,36 @@ export function CausalMediationExplorer({
     [targetData, targetPromptText],
   );
 
-  const [intervention, setIntervention] = useState<Intervention | null>(null);
+  const [internalIntervention, setInternalIntervention] = useState<Intervention | null>(null);
   const [internalResultData, setInternalResultData] = useState<LogitLensData | null>(null);
   const [selectedCell, setSelectedCell] = useState<SelectedCell | null>(null);
   const [resultSelectedCell, setResultSelectedCell] = useState<SelectedCell | null>(null);
   const [sourceHighlightRef, setSourceHighlightRef] = useState<HTMLElement | null>(null);
   const [targetHighlightRef, setTargetHighlightRef] = useState<HTMLElement | null>(null);
+
+  // Guided-tutorial "Show me" spotlight (opt-in via SpotlightProvider). Resolve
+  // the requested {grid, layer, position} cells against a grid's data, turning
+  // `'last'` into concrete indices; keeps only the cells addressed to that grid,
+  // so each HeatmapGrid rings its own. Several cells can be lit at once — a
+  // patching hint lights both ends of the drag.
+  // A spotlight with no `position` names a layer only: the column is forced into
+  // view but no cell is ringed, so `tokenPosition` is null downstream.
+  const { targets: spotlights } = useSpotlight();
+  const resolveSpotlights = (
+    grid: 'source' | 'target' | 'result',
+    data: LogitLensData,
+  ): { tokenPosition: number | null; layer: number }[] => {
+    if (!data.tokens.length || !data.layers.length) return [];
+    const lastLayer = data.layers[data.layers.length - 1];
+    const lastPos = data.tokens.length - 1;
+    return spotlights
+      .filter((s) => s.grid === grid)
+      .map((s) => ({
+        tokenPosition:
+          s.position == null ? null : s.position === 'last' ? lastPos : s.position,
+        layer: s.layer === 'last' ? lastLayer : s.layer,
+      }));
+  };
 
   // When the parent passes `resultData` (controlled), it is the source of truth.
   //   - non-null LogitLensData: render it
@@ -76,17 +130,192 @@ export function CausalMediationExplorer({
     ? controlledResultData ?? null
     : internalResultData;
 
+  // Same controlled pattern for the intervention: a non-undefined prop is the
+  // source of truth (restored/revisited patch); undefined falls back to the
+  // internal drag state. A live drag sets the internal state first (instant),
+  // then the parent persists + re-supplies the identical spec via the prop.
+  const isInterventionControlled = controlledIntervention !== undefined;
+  const intervention = isInterventionControlled ? controlledIntervention : internalIntervention;
+
   // Shared toolbar state — both grids share zoom, tokenStep, layerStep.
   const [zoom, setZoom] = useState(100);
   const [tokenStep, setTokenStep] = useState(1);
   const [layerStep, setLayerStep] = useState(1);
 
+  // Synced scrolling between the two heatmaps (default on). Both grids report
+  // their scroll into this shared state and follow it.
+  const [syncScroll, setSyncScroll] = useState(true);
+  const [scrollState, setScrollState] = useState<{ scrollLeft: number; scrollTop: number } | null>(
+    null,
+  );
+
+  // Auto-fit: when on (default), measure the wrapper holding the two grids and
+  // derive shared token/layer steps so both grids fit without scrolling. The
+  // toolbar's step inputs disable it (manual override).
+  const [autoFit, setAutoFit] = useState(true);
+  const [gridsSize, setGridsSize] = useState<{ width: number; height: number } | null>(null);
+  const gridsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = gridsRef.current;
+    if (!el) return;
+    const update = () => setGridsSize({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // How many columns/rows a grid actually renders at a given step. Mirrors
+  // HeatmapGrid's display filter: every step'th index, plus the last one always.
+  // Declared before auto-fit because auto-fit now budgets in rendered columns.
   const countVisible = (total: number, step: number) => {
     let n = 0;
     for (let i = 0; i < total; i++) {
       if (i % step === 0 || i === total - 1) n++;
     }
     return n;
+  };
+
+  // Layer INDICES each grid is forced to render because a spotlight names them.
+  // Auto-fit has to know about these before it picks a step: HeatmapGrid renders
+  // a spotlit layer on TOP of the downsampled set, so a step chosen as if the
+  // spotlight didn't exist overflows the scroll container by exactly the forced
+  // columns — and a forced-but-clipped column is worse than no column at all,
+  // since the tutorial then points at something off screen.
+  const spotlitLayerIndicesPerGrid = useMemo(() => {
+    const idxsFor = (grid: 'source' | 'target' | 'result', data: LogitLensData) =>
+      resolveSpotlights(grid, data)
+        .map((s) => data.layers.indexOf(s.layer))
+        .filter((i) => i >= 0);
+    return [
+      idxsFor('source', sourcePrompt.data),
+      isSinglePromptMode ? [] : idxsFor('target', targetPrompt.data),
+      resultData ? idxsFor('result', resultData) : [],
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotlights, sourcePrompt.data, targetPrompt.data, resultData, isSinglePromptMode]);
+
+  // Cell footprint constants mirror HeatmapGrid's BASE_* values. The two grids
+  // sit side by side, so each gets ~half the wrapper width (minus the inter-grid
+  // gap). Compute from the LARGER of the two prompts so both stay aligned.
+  const autoStep = useMemo(() => {
+    if (!gridsSize) return { tokenStep: 1, layerStep: 1 };
+    const numTokens = Math.max(
+      sourcePrompt.data.tokens.length,
+      targetPrompt.data.tokens.length,
+    );
+    const numLayers = Math.max(
+      sourcePrompt.data.layers.length,
+      targetPrompt.data.layers.length,
+    );
+    if (numTokens === 0 || numLayers === 0) return { tokenStep: 1, layerStep: 1 };
+
+    const colFootprint = 72 + 28; // BASE_CELL_WIDTH + BASE_HORIZ_ARROW_WIDTH
+    // Per-row block matches HeatmapGrid's `rowBlockH` at zoom 100:
+    // BASE_CELL_HEIGHT(48) + top gap(8) + BASE_VERT_ARROW_HEIGHT(6) + bottom
+    // gap(8). The old value (48 + 16) undercounted each row by 6px, which
+    // accumulated into the final row overflowing the scroll container.
+    const rowFootprint = 48 + 8 + 6 + 8;
+    const tokenColWidth = 80; // BASE_TOKEN_COL_WIDTH
+    const interGridGap = 24; // gap-1.5rem between the two grids
+    // Horizontal reserve: token-col gutter + card padding + the ~20px rotated
+    // "Tokens" y-axis title strip that sits left of the scroll container.
+    const padding = 48;
+
+    // Vertical chrome inside gridsSize.height that is NOT cell rows, so the
+    // token-fit budget excludes it. gridsSize.height (gridsRef.clientHeight)
+    // spans each grid's scroll container (capped at 82vh) PLUS the probability
+    // legend, which sits inside gridsRef. The non-row chrome is, at zoom 100:
+    //   top:    pt-4 (16) + X-axis title (~19) + sticky layer header (~37) ≈ 72
+    //   bottom: layer-number row (~29) + bottom axis title (~23) + pb-4 (16) ≈ 68
+    //   legend: ~30 (below the scroll container, inside the card)
+    // The old code folded all of this into `padding = 40`, badly undercounting
+    // it — so auto-fit thought more rows fit than the 82vh container could show
+    // and clipped the final row (bug B1). Rounded up slightly for slack so the
+    // last row never clips at the cost of occasionally one fewer row.
+    const vChrome = 180;
+
+    // In single-prompt mode only ONE grid renders, so it gets the full wrapper
+    // width — don't halve it. Halving here was the bug that capped a lone grid
+    // at ~4 layers when ~11 would fit (the two-grid split was applied even with
+    // no target grid present).
+    const perGridWidth = isSinglePromptMode
+      ? gridsSize.width
+      : (gridsSize.width - interGridGap) / 2;
+    const colsThatFit = Math.max(
+      1,
+      Math.floor((perGridWidth - tokenColWidth - padding) / colFootprint),
+    );
+
+    // Budget in RENDERED columns, not in sampled ones. The two differ: the last
+    // layer is always drawn on top of the sampled set, so the un-spotlit grid has
+    // always rendered colsThatFit + 1 columns and the layout is tuned to that.
+    // Taking the un-spotlit column count as the budget keeps the no-spotlight
+    // case byte-identical while giving the spotlight a ceiling to respect.
+    const columnBudget = countVisible(numLayers, Math.max(1, Math.ceil(numLayers / colsThatFit)));
+
+    // Distinct spotlit columns a step does NOT already render, worst grid first:
+    // layerStep is shared, so the pair stays aligned only if it is chosen for
+    // whichever grid pays the most for its spotlights.
+    const forcedColumns = (step: number) =>
+      Math.max(
+        0,
+        ...spotlitLayerIndicesPerGrid.map(
+          (idxs) => new Set(idxs.filter((i) => i % step !== 0 && i !== numLayers - 1)).size,
+        ),
+      );
+
+    // Spend the budget on the densest step whose FULL column set — sampled plus
+    // forced — still fits. Walked from dense to coarse rather than solved
+    // directly, because the cost of a spotlight isn't monotonic in the step: a
+    // coarser step can pull a forced column back into the sampled set for free
+    // (layer 20 costs nothing at step 10, one column at step 16). Falls through
+    // to 1 when nothing fits, which is not a failure — at a tutorial-dock width
+    // the budget is a single column and first + forced + last genuinely cannot
+    // fit. HeatmapGrid scrolls the forced column into view for that case.
+    let layersThatFit = 1;
+    for (let b = colsThatFit; b >= 1; b--) {
+      const step = Math.max(1, Math.ceil(numLayers / b));
+      if (countVisible(numLayers, step) + forcedColumns(step) <= columnBudget) {
+        layersThatFit = b;
+        break;
+      }
+    }
+    const tokensThatFit = Math.max(
+      1,
+      Math.floor((gridsSize.height - vChrome) / rowFootprint),
+    );
+
+    return {
+      layerStep: Math.max(1, Math.ceil(numLayers / layersThatFit)),
+      // Token rows are never downsampled: with compact rows we always show every
+      // token (rows scroll if they overflow). Token-step downsampling read as a
+      // confusing extra concept, so it's fixed at 1 (tokensThatFit is unused now
+      // but kept for the layer-fit vertical-budget reasoning above).
+      tokenStep: 1,
+    };
+  }, [
+    gridsSize,
+    isSinglePromptMode,
+    spotlitLayerIndicesPerGrid,
+    sourcePrompt.data.tokens.length,
+    sourcePrompt.data.layers.length,
+    targetPrompt.data.tokens.length,
+    targetPrompt.data.layers.length,
+  ]);
+
+  // While auto-fit is on, drive the shared steps from the computed values.
+  useEffect(() => {
+    if (!autoFit) return;
+    setTokenStep(autoStep.tokenStep);
+    setLayerStep(autoStep.layerStep);
+  }, [autoFit, autoStep.tokenStep, autoStep.layerStep]);
+
+  const handleLayerStepChange = (step: number) => {
+    setAutoFit(false);
+    setLayerStep(step);
+    onEvent?.({ type: 'layer_step_change', step });
   };
 
   const sourceVisibleTokens = countVisible(sourcePrompt.data.tokens.length, tokenStep);
@@ -107,7 +336,7 @@ export function CausalMediationExplorer({
   ]);
 
   useEffect(() => {
-    setIntervention(null);
+    setInternalIntervention(null);
     setInternalResultData(null);
     setSelectedCell(null);
     setResultSelectedCell(null);
@@ -123,7 +352,7 @@ export function CausalMediationExplorer({
       targetTokenPosition: targetTokenPos,
     };
 
-    setIntervention(newIntervention);
+    setInternalIntervention(newIntervention);
 
     if (onIntervention) {
       // Controlled path: parent owns the real result.
@@ -153,12 +382,24 @@ export function CausalMediationExplorer({
   };
 
   const handleReset = () => {
-    setIntervention(null);
-    // Reset is UI-only: just clear internal state. Parent-controlled `resultData`
-    // is not touched here (parent can observe intervention via onIntervention if needed).
+    setInternalIntervention(null);
+    // Ask a controlling parent to drop its persisted spec too; otherwise the
+    // `intervention` prop would immediately re-supply the patch we just cleared.
+    onResetIntervention?.();
     setInternalResultData(null);
     setSelectedCell(null);
     setResultSelectedCell(null);
+  };
+
+  // Reference tokens for the top-k lists' "final prediction" markers: the
+  // top-1 at the final layer of the clicked row, and the top-1 at the final
+  // layer of the last position (the model's actual output).
+  const finalTokensFor = (data: LogitLensData, tokenPosition: number) => {
+    const lastLayerIdx = data.layers.length - 1;
+    return {
+      rowFinalToken: data.data[tokenPosition]?.[lastLayerIdx]?.token,
+      gridFinalToken: data.data[data.data.length - 1]?.[lastLayerIdx]?.token,
+    };
   };
 
   const handleCellClick = (promptId: string, tokenPosition: number, layer: number) => {
@@ -182,7 +423,9 @@ export function CausalMediationExplorer({
       layer,
       topTokens: cell.topTokens,
       promptId,
+      ...finalTokensFor(data, tokenPosition),
     });
+    onEvent?.({ type: 'cell_click', promptId, tokenPosition, layer });
   };
 
   const handleResultCellClick = (tokenPosition: number, layer: number) => {
@@ -196,7 +439,9 @@ export function CausalMediationExplorer({
       layer,
       topTokens: cell.topTokens,
       promptId: 'result',
+      ...finalTokensFor(resultData, tokenPosition),
     });
+    onEvent?.({ type: 'result_cell_click', tokenPosition, layer });
   };
 
   // Auto-select last token / last layer of the result prompt
@@ -212,9 +457,85 @@ export function CausalMediationExplorer({
         layer: lastLayer,
         topTokens: lastCell.topTokens,
         promptId: 'result',
+        rowFinalToken: lastCell.token,
+        gridFinalToken: lastCell.token,
       });
     }
   }, [resultData]);
+
+  // Report the post-patch output token to a host scoring an activity against
+  // the patch. Emit on every distinct grid-final token (last position, final
+  // layer) — covers the null->result transition and a re-patch that changes the
+  // outcome without an intervening reset; skips duplicate emits for the same
+  // token, and clears the memo on reset so an identical token re-emits later.
+  const lastEmittedResultTokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!resultData) {
+      // Report the disappearance, not just the arrival. A host that announces the
+      // patch outcome ("the target now predicts X") has no other way to learn the
+      // patched grid is gone — e.g. a fresh lens run replaces the patched run as
+      // the active one — and would keep describing a result no longer on screen.
+      if (lastEmittedResultTokenRef.current !== null) onInterventionResult?.(null);
+      lastEmittedResultTokenRef.current = null;
+      return;
+    }
+    const lastTokenIdx = resultData.data.length - 1;
+    const lastLayerIdx = resultData.layers.length - 1;
+    const token = resultData.data[lastTokenIdx]?.[lastLayerIdx]?.token ?? null;
+    if (token !== lastEmittedResultTokenRef.current) {
+      lastEmittedResultTokenRef.current = token;
+      onInterventionResult?.(token);
+    }
+  }, [resultData, onInterventionResult]);
+
+  // Once the intervention result is ready, bring it into view — it mounts
+  // below the two source/target grids, past the fold, and pilot users didn't
+  // notice it appear. Only queued on the null -> data transition so manual
+  // scrolling afterwards isn't hijacked by refetches.
+  const resultContainerRef = useRef<HTMLDivElement>(null);
+  const pendingResultScrollRef = useRef(false);
+  const hadResultRef = useRef(false);
+  useEffect(() => {
+    const hasResult = !!resultData;
+    if (hasResult && !hadResultRef.current) pendingResultScrollRef.current = true;
+    hadResultRef.current = hasResult;
+  }, [resultData]);
+
+  // Fire the queued scroll only after layout has settled. On a restored patch
+  // the result exists at MOUNT, when auto-fit hasn't measured the wrapper or
+  // applied its derived steps yet — scrolling then lands on a position that
+  // the following relayout invalidates. Waiting until the applied steps match
+  // the auto-fit target (or auto-fit is off) scrolls to the final geometry.
+  // A live drag has settled layout already, so it scrolls immediately.
+  const stepsSettled =
+    !autoFit ||
+    (!!gridsSize && tokenStep === autoStep.tokenStep && layerStep === autoStep.layerStep);
+  useEffect(() => {
+    if (!pendingResultScrollRef.current || !resultData || !stepsSettled) return;
+    pendingResultScrollRef.current = false;
+    requestAnimationFrame(() => {
+      resultContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [resultData, stepsSettled]);
+
+  // Bring the LOADING state into view too, not just the finished result. An
+  // intervention takes tens of seconds, and its spinner sits below the two grids,
+  // past the fold — the same place the result was that pilot users didn't notice.
+  // Scrolling only on completion means the whole wait happens off screen, so the
+  // drag reads as having done nothing and gets retried on top of the request
+  // already in flight. Fires on the transition into pending, so it can't fight
+  // manual scrolling during the wait.
+  const pendingRef = useRef<HTMLDivElement>(null);
+  const isPendingVisible = isInterventionPending && !!intervention && !resultData;
+  const wasPendingRef = useRef(false);
+  useEffect(() => {
+    if (isPendingVisible && !wasPendingRef.current) {
+      requestAnimationFrame(() => {
+        pendingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+    wasPendingRef.current = isPendingVisible;
+  }, [isPendingVisible]);
 
   const resultPromptInput = useMemo<PromptInput | null>(
     () =>
@@ -238,19 +559,22 @@ export function CausalMediationExplorer({
             <HeatmapToolbar
               zoom={zoom}
               onZoomChange={setZoom}
-              tokenStep={tokenStep}
-              onTokenStepChange={setTokenStep}
               layerStep={layerStep}
-              onLayerStepChange={setLayerStep}
+              onLayerStepChange={handleLayerStepChange}
               summary={toolbarSummary}
+              syncScroll={syncScroll}
+              onSyncScrollChange={setSyncScroll}
             />
           </div>
 
-          {/* Side-by-side prompts */}
+          {/* Side-by-side prompts (single column when in single-prompt mode). */}
           <div
+            ref={gridsRef}
             style={{
               display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+              gridTemplateColumns: isSinglePromptMode
+                ? 'minmax(0, 1fr)'
+                : 'minmax(0, 1fr) minmax(0, 1fr)',
               gap: '1.5rem',
             }}
           >
@@ -268,14 +592,19 @@ export function CausalMediationExplorer({
                       }
                     : undefined
                 }
+                spotlightCells={resolveSpotlights('source', sourcePrompt.data)}
                 selectedCell={selectedCell}
                 onCellClick={(tokenPos, layer) =>
                   handleCellClick(sourcePrompt.id, tokenPos, layer)
                 }
                 onHighlightRefChange={setSourceHighlightRef}
+                onScroll={syncScroll && !isSinglePromptMode ? setScrollState : undefined}
+                scrollState={syncScroll && !isSinglePromptMode ? scrollState : undefined}
+                isSourceDraggable={!isSinglePromptMode}
               />
             </div>
 
+            {!isSinglePromptMode && (
             <div className="min-w-0 w-full">
               <HeatmapGrid
                 prompt={targetPrompt}
@@ -292,13 +621,17 @@ export function CausalMediationExplorer({
                       }
                     : undefined
                 }
+                spotlightCells={resolveSpotlights('target', targetPrompt.data)}
                 selectedCell={selectedCell}
                 onCellClick={(tokenPos, layer) =>
                   handleCellClick(targetPrompt.id, tokenPos, layer)
                 }
                 onHighlightRefChange={setTargetHighlightRef}
+                onScroll={syncScroll ? setScrollState : undefined}
+                scrollState={syncScroll ? scrollState : undefined}
               />
             </div>
+            )}
           </div>
 
           {intervention && sourceHighlightRef && targetHighlightRef && (
@@ -314,6 +647,7 @@ export function CausalMediationExplorer({
           <AnimatePresence>
             {resultPromptInput && intervention && (
               <motion.div
+                ref={resultContainerRef}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
@@ -380,7 +714,7 @@ export function CausalMediationExplorer({
                           backgroundColor: '#ffffff',
                         }}
                       />
-                      [{sourcePrompt.data.tokens[intervention.sourceTokenPosition]}, Layer {intervention.sourceLayer}]
+                      [{formatTokenDisplay(sourcePrompt.data.tokens[intervention.sourceTokenPosition] ?? '')}, Layer {intervention.sourceLayer}]
                     </span>
                     <span style={{ fontSize: 18, color: '#6b7280' }}>&rarr;</span>
                     <span
@@ -404,7 +738,7 @@ export function CausalMediationExplorer({
                           backgroundColor: '#ffffff',
                         }}
                       />
-                      [{targetPrompt.data.tokens[intervention.targetTokenPosition]}, Layer {intervention.targetLayer}]
+                      [{formatTokenDisplay(targetPrompt.data.tokens[intervention.targetTokenPosition] ?? '')}, Layer {intervention.targetLayer}]
                     </span>
                   </div>
 
@@ -418,6 +752,7 @@ export function CausalMediationExplorer({
                         tokenPosition: intervention.targetTokenPosition,
                         layer: intervention.targetLayer,
                       }}
+                      spotlightCells={resolveSpotlights('result', resultPromptInput.data)}
                       selectedCell={resultSelectedCell}
                       onCellClick={handleResultCellClick}
                       isResult={true}
@@ -437,8 +772,9 @@ export function CausalMediationExplorer({
           </AnimatePresence>
 
           {/* Loading state: parent is running a backend call for the intervention. */}
-          {isInterventionPending && intervention && !resultData && (
+          {isPendingVisible && (
             <motion.div
+              ref={pendingRef}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
@@ -447,14 +783,23 @@ export function CausalMediationExplorer({
               role="status"
               aria-live="polite"
             >
+              {/* An intervention is a second forward pass with a hook, so it is
+                  routinely slower than the plain lens run that preceded it. Without
+                  a duration cue the wait reads as a hang, and the drag gets retried
+                  on top of the request already in flight. */}
               <div className="flex flex-col items-center gap-3 text-gray-500">
                 <Loader2 className="w-6 h-6 animate-spin" />
-                <p className="text-sm">Computing intervention&hellip;</p>
+                <div className="flex flex-col items-center gap-1">
+                  <p className="text-sm">Computing intervention&hellip;</p>
+                  <p className="text-xs text-gray-400">
+                    This usually takes 30&ndash;40 seconds &mdash; hang tight.
+                  </p>
+                </div>
               </div>
             </motion.div>
           )}
 
-          {!resultPromptInput && !(isInterventionPending && intervention) && (
+          {!isSinglePromptMode && !resultPromptInput && !(isInterventionPending && intervention) && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -467,11 +812,30 @@ export function CausalMediationExplorer({
               </p>
             </motion.div>
           )}
+          {isSinglePromptMode && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center text-gray-500 py-3 border-2 border-dashed border-gray-300 rounded-xl bg-white/50"
+            >
+              <p className="text-sm">
+                Click any cell to view its top token predictions. Add a target
+                prompt above to enable drag-and-drop patching.
+              </p>
+            </motion.div>
+          )}
         </div>
 
         <TokenPredictionPanel
           selectedCell={selectedCell}
           onClose={() => setSelectedCell(null)}
+          highlightColor={
+            selectedCell?.promptId === targetPrompt.id
+              ? targetPrompt.color
+              : selectedCell?.promptId === 'result'
+                ? targetPrompt.color
+                : sourcePrompt.color
+          }
         />
       </div>
     </DndProvider>

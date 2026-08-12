@@ -188,7 +188,11 @@ export const CurvedPatchArrow: React.FC<CurvedPatchArrowProps> = ({
         width: arrowPath.width,
         height: arrowPath.height,
         pointerEvents: 'none',
-        zIndex: 1000,
+        // Sit above the in-flow heatmap grids but BELOW the host app's modal
+        // layer (Radix dialogs render at z-50), so this fixed-position arrow
+        // can't escape its subtree and paint over the workbench's compare
+        // overlay. Previously 1000, which floated above every modal.
+        zIndex: 30,
         overflow: 'hidden',
       }}
     >
