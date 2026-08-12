@@ -9,7 +9,13 @@ import { createContext, useContext, useMemo, useState, type ReactNode } from 're
 export type CellSpotlight = {
   grid: 'source' | 'target' | 'result';
   layer: number | 'last';
-  position: number | 'last';
+  /**
+   * Omit to force the layer column to render without ringing any cell. A step
+   * that asks the reader to *look* at a depth ("compare layer 20 across the two
+   * prompts") needs that column on screen, but a ring on one arbitrary row would
+   * read as "this cell is the point" and send the reader after the wrong thing.
+   */
+  position?: number | 'last';
 };
 
 interface SpotlightContextValue {

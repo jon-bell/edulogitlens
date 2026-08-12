@@ -43,7 +43,9 @@ interface HeatmapGridProps {
   // intervention highlight). Each layer resolves to the nearest rendered layer,
   // so a downsampled grid still shows the ring near the requested depth. Takes a
   // list because a patching hint wants both ends of the drag lit at once.
-  spotlightCells?: { tokenPosition: number; layer: number }[];
+  // A null tokenPosition names a layer only: the column is forced into view and
+  // scrolled to, but no cell is ringed.
+  spotlightCells?: { tokenPosition: number | null; layer: number }[];
   selectedCell?: SelectedCell | null;
   onCellClick?: (tokenPosition: number, layer: number) => void;
   isResult?: boolean;
@@ -213,7 +215,9 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     (spotlightCells ?? []).map((c) => allLayers.indexOf(c.layer)).filter((i) => i >= 0),
   );
   const spotlitTokenIndices = new Set(
-    (spotlightCells ?? []).map((c) => c.tokenPosition).filter((i) => i >= 0 && i < allTokens.length),
+    (spotlightCells ?? [])
+      .map((c) => c.tokenPosition)
+      .filter((i): i is number => i != null && i >= 0 && i < allTokens.length),
   );
 
   const displayLayerIndices = allLayers
@@ -230,14 +234,18 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   // Still snap, but now only as a fallback: a spotlight naming a layer this
   // prompt doesn't have (a host hard-coding a layer count) rings the closest one
   // rather than nothing. An exact match is rendered above, so it snaps to itself.
+  // Position-less entries produce nothing here — they force a column (above) but
+  // name no cell, so there is nothing to ring.
   const snappedSpotlights =
     spotlightCells && displayLayers.length > 0
-      ? spotlightCells.map((c) => ({
-          tokenPosition: c.tokenPosition,
-          layer: displayLayers.reduce((best, lv) =>
-            Math.abs(lv - c.layer) < Math.abs(best - c.layer) ? lv : best,
-          ),
-        }))
+      ? spotlightCells
+          .filter((c): c is { tokenPosition: number; layer: number } => c.tokenPosition != null)
+          .map((c) => ({
+            tokenPosition: c.tokenPosition,
+            layer: displayLayers.reduce((best, lv) =>
+              Math.abs(lv - c.layer) < Math.abs(best - c.layer) ? lv : best,
+            ),
+          }))
       : [];
 
   const displayTokenIndices = allTokens
@@ -331,6 +339,95 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
     ro.observe(content);
     return () => ro.disconnect();
   }, [measureOverlayGeom]);
+
+  // Bring a spotlit column (and its row) into view. Forcing the column to RENDER
+  // is not enough on its own: with two grids side by side in a 1366px window and
+  // a tutorial panel docked, each grid's column budget is ONE, so first + forced
+  // + last overflow the scroll container and the forced column sits past its
+  // right edge. That is how the fielded bug read — the tutorial rang a cell the
+  // participant could not see and had no reason to scroll for.
+  //
+  // Only this grid's own scroll container is touched, never an ancestor: a
+  // scrollIntoView here would also drag the page, yanking the tutorial panel and
+  // the other grid out from under the reader.
+  const spotlightKey = (spotlightCells ?? [])
+    .map((c) => `${c.layer}:${c.tokenPosition ?? '-'}`)
+    .join('|');
+  // Only a CHANGE of spotlight scrolls. Re-renders are constant here (hover,
+  // selection, a refetch handing back an equal-but-new data array), and scrolling
+  // on any of them would fight the participant every time they moved the grid.
+  // The window stays open for a beat after the change because the relayout it
+  // triggers — auto-fit reacting to the forced column with a new layerStep —
+  // lands a frame or two later and moves the column out from under the scroll
+  // already applied.
+  const spotlightSettleUntilRef = React.useRef(0);
+  const applySpotlightScroll = () => {
+    const sc = scrollRef.current;
+    const content = contentRef.current;
+    const first = (spotlightCells ?? [])[0];
+    if (!sc || !content || !first) return;
+    // Offsets are taken against the content div, the same scroll-invariant
+    // reference the overlay geometry uses.
+    const base = content.getBoundingClientRect();
+
+    // The exact column when this prompt has that layer (it is force-rendered
+    // above); otherwise the nearest rendered one, matching the ring's snap.
+    let colDispIdx = displayLayerIndices.indexOf(allLayers.indexOf(first.layer));
+    if (colDispIdx < 0 && displayLayers.length > 0) {
+      colDispIdx = displayLayers.reduce(
+        (best, lv, j) =>
+          Math.abs(lv - first.layer) < Math.abs(displayLayers[best] - first.layer) ? j : best,
+        0,
+      );
+    }
+    const colEl = colDispIdx >= 0 ? colElsRef.current.get(colDispIdx) : undefined;
+    if (colEl) {
+      // Centered, and centered in what is LEFT of the scroll port: the token
+      // label column is sticky and paints over the port's left edge, so a column
+      // scrolled under it is as invisible as one past the right edge. Both
+      // clamps matter when the port is narrower than the column (the result
+      // grid's sidebar can squeeze it to a sliver): centering then computes a
+      // scroll PAST the column, so fall back to butting it against the sticky
+      // column, which shows as much of it as the sliver allows.
+      const r = colEl.getBoundingClientRect();
+      const port = Math.max(0, sc.clientWidth - tokenColWidth);
+      const wanted = r.left - base.left - tokenColWidth - Math.max(0, port - r.width) / 2;
+      sc.scrollLeft = Math.max(0, Math.min(sc.scrollWidth - sc.clientWidth, wanted));
+    }
+
+    const rowDispIdx =
+      first.tokenPosition == null ? -1 : displayTokenIndices.indexOf(first.tokenPosition);
+    const rowEl = rowDispIdx >= 0 ? rowElsRef.current.get(rowDispIdx) : undefined;
+    if (rowEl) {
+      // Nearest edge vertically, not centered: rows are dense and usually all
+      // fit, so re-centering would shuffle the prompt for no gain. Only move when
+      // the row is outside the band the sticky layer-number header leaves.
+      const r = rowEl.getBoundingClientRect();
+      const top = r.top - base.top;
+      const headerH = Math.max(24, cellHeight * 0.6) + 8; // sticky layer row + mb-2
+      let wanted = sc.scrollTop;
+      if (top - headerH < sc.scrollTop) wanted = top - headerH;
+      else if (top + r.height > sc.scrollTop + sc.clientHeight)
+        wanted = top + r.height - sc.clientHeight;
+      sc.scrollTop = Math.max(0, Math.min(sc.scrollHeight - sc.clientHeight, wanted));
+    }
+  };
+
+  React.useLayoutEffect(() => {
+    // Empty key = the spotlight was cleared. Leave the scroll where the
+    // participant left it; snapping back to the origin loses their place.
+    if (!spotlightKey) return;
+    spotlightSettleUntilRef.current = Date.now() + 400;
+    applySpotlightScroll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotlightKey]);
+
+  // Re-apply while the window is open, so the relayout that the spotlight itself
+  // provoked doesn't leave the scroll pointing at where the column used to be.
+  React.useLayoutEffect(() => {
+    if (Date.now() > spotlightSettleUntilRef.current) return;
+    applySpotlightScroll();
+  });
 
   const isInterventionCell = (tokenPos: number, layerIdx: number): boolean => {
     if (!isResult || !interventionCell) return false;

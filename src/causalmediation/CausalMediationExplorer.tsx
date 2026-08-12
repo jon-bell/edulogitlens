@@ -102,18 +102,21 @@ export function CausalMediationExplorer({
   // `'last'` into concrete indices; keeps only the cells addressed to that grid,
   // so each HeatmapGrid rings its own. Several cells can be lit at once — a
   // patching hint lights both ends of the drag.
+  // A spotlight with no `position` names a layer only: the column is forced into
+  // view but no cell is ringed, so `tokenPosition` is null downstream.
   const { targets: spotlights } = useSpotlight();
   const resolveSpotlights = (
     grid: 'source' | 'target' | 'result',
     data: LogitLensData,
-  ): { tokenPosition: number; layer: number }[] => {
+  ): { tokenPosition: number | null; layer: number }[] => {
     if (!data.tokens.length || !data.layers.length) return [];
     const lastLayer = data.layers[data.layers.length - 1];
     const lastPos = data.tokens.length - 1;
     return spotlights
       .filter((s) => s.grid === grid)
       .map((s) => ({
-        tokenPosition: s.position === 'last' ? lastPos : s.position,
+        tokenPosition:
+          s.position == null ? null : s.position === 'last' ? lastPos : s.position,
         layer: s.layer === 'last' ? lastLayer : s.layer,
       }));
   };
@@ -163,6 +166,36 @@ export function CausalMediationExplorer({
     return () => ro.disconnect();
   }, []);
 
+  // How many columns/rows a grid actually renders at a given step. Mirrors
+  // HeatmapGrid's display filter: every step'th index, plus the last one always.
+  // Declared before auto-fit because auto-fit now budgets in rendered columns.
+  const countVisible = (total: number, step: number) => {
+    let n = 0;
+    for (let i = 0; i < total; i++) {
+      if (i % step === 0 || i === total - 1) n++;
+    }
+    return n;
+  };
+
+  // Layer INDICES each grid is forced to render because a spotlight names them.
+  // Auto-fit has to know about these before it picks a step: HeatmapGrid renders
+  // a spotlit layer on TOP of the downsampled set, so a step chosen as if the
+  // spotlight didn't exist overflows the scroll container by exactly the forced
+  // columns — and a forced-but-clipped column is worse than no column at all,
+  // since the tutorial then points at something off screen.
+  const spotlitLayerIndicesPerGrid = useMemo(() => {
+    const idxsFor = (grid: 'source' | 'target' | 'result', data: LogitLensData) =>
+      resolveSpotlights(grid, data)
+        .map((s) => data.layers.indexOf(s.layer))
+        .filter((i) => i >= 0);
+    return [
+      idxsFor('source', sourcePrompt.data),
+      isSinglePromptMode ? [] : idxsFor('target', targetPrompt.data),
+      resultData ? idxsFor('result', resultData) : [],
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotlights, sourcePrompt.data, targetPrompt.data, resultData, isSinglePromptMode]);
+
   // Cell footprint constants mirror HeatmapGrid's BASE_* values. The two grids
   // sit side by side, so each gets ~half the wrapper width (minus the inter-grid
   // gap). Compute from the LARGER of the two prompts so both stay aligned.
@@ -210,10 +243,45 @@ export function CausalMediationExplorer({
     const perGridWidth = isSinglePromptMode
       ? gridsSize.width
       : (gridsSize.width - interGridGap) / 2;
-    const layersThatFit = Math.max(
+    const colsThatFit = Math.max(
       1,
       Math.floor((perGridWidth - tokenColWidth - padding) / colFootprint),
     );
+
+    // Budget in RENDERED columns, not in sampled ones. The two differ: the last
+    // layer is always drawn on top of the sampled set, so the un-spotlit grid has
+    // always rendered colsThatFit + 1 columns and the layout is tuned to that.
+    // Taking the un-spotlit column count as the budget keeps the no-spotlight
+    // case byte-identical while giving the spotlight a ceiling to respect.
+    const columnBudget = countVisible(numLayers, Math.max(1, Math.ceil(numLayers / colsThatFit)));
+
+    // Distinct spotlit columns a step does NOT already render, worst grid first:
+    // layerStep is shared, so the pair stays aligned only if it is chosen for
+    // whichever grid pays the most for its spotlights.
+    const forcedColumns = (step: number) =>
+      Math.max(
+        0,
+        ...spotlitLayerIndicesPerGrid.map(
+          (idxs) => new Set(idxs.filter((i) => i % step !== 0 && i !== numLayers - 1)).size,
+        ),
+      );
+
+    // Spend the budget on the densest step whose FULL column set — sampled plus
+    // forced — still fits. Walked from dense to coarse rather than solved
+    // directly, because the cost of a spotlight isn't monotonic in the step: a
+    // coarser step can pull a forced column back into the sampled set for free
+    // (layer 20 costs nothing at step 10, one column at step 16). Falls through
+    // to 1 when nothing fits, which is not a failure — at a tutorial-dock width
+    // the budget is a single column and first + forced + last genuinely cannot
+    // fit. HeatmapGrid scrolls the forced column into view for that case.
+    let layersThatFit = 1;
+    for (let b = colsThatFit; b >= 1; b--) {
+      const step = Math.max(1, Math.ceil(numLayers / b));
+      if (countVisible(numLayers, step) + forcedColumns(step) <= columnBudget) {
+        layersThatFit = b;
+        break;
+      }
+    }
     const tokensThatFit = Math.max(
       1,
       Math.floor((gridsSize.height - vChrome) / rowFootprint),
@@ -230,6 +298,7 @@ export function CausalMediationExplorer({
   }, [
     gridsSize,
     isSinglePromptMode,
+    spotlitLayerIndicesPerGrid,
     sourcePrompt.data.tokens.length,
     sourcePrompt.data.layers.length,
     targetPrompt.data.tokens.length,
@@ -247,14 +316,6 @@ export function CausalMediationExplorer({
     setAutoFit(false);
     setLayerStep(step);
     onEvent?.({ type: 'layer_step_change', step });
-  };
-
-  const countVisible = (total: number, step: number) => {
-    let n = 0;
-    for (let i = 0; i < total; i++) {
-      if (i % step === 0 || i === total - 1) n++;
-    }
-    return n;
   };
 
   const sourceVisibleTokens = countVisible(sourcePrompt.data.tokens.length, tokenStep);
