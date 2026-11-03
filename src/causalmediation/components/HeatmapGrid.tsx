@@ -52,8 +52,6 @@ interface HeatmapGridProps {
   blendColor?: string;
   interventionCell?: { tokenPosition: number; layer: number; sourceColor: string };
   onHighlightRefChange?: (ref: HTMLElement | null) => void;
-  showSidebar?: boolean;
-  sidebarContent?: React.ReactNode;
   // Synced scrolling: when scrollState is provided the grid follows it
   // (controlled); the grid also reports its own scroll via onScroll.
   onScroll?: (state: { scrollLeft: number; scrollTop: number }) => void;
@@ -78,8 +76,6 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
   blendColor,
   interventionCell,
   onHighlightRefChange,
-  showSidebar = false,
-  sidebarContent,
   onScroll,
   scrollState,
   isSourceDraggable = true,
@@ -385,8 +381,8 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
       // Centered, and centered in what is LEFT of the scroll port: the token
       // label column is sticky and paints over the port's left edge, so a column
       // scrolled under it is as invisible as one past the right edge. Both
-      // clamps matter when the port is narrower than the column (the result
-      // grid's sidebar can squeeze it to a sliver): centering then computes a
+      // clamps matter when the port is narrower than the column (a narrow card
+      // can squeeze it to a sliver): centering then computes a
       // scroll PAST the column, so fall back to butting it against the sticky
       // column, which shows as much of it as the sliver allows.
       const r = colEl.getBoundingClientRect();
@@ -477,15 +473,24 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
           50% { box-shadow: 0 0 0 4px #2563eb, 0 0 18px 6px rgba(37,99,235,0.75); }
         }`}</style>
       )}
-      <div className={showSidebar ? 'flex min-w-0 w-full' : 'w-full min-w-0'}>
-        <div className={showSidebar ? 'flex-1 min-w-0' : 'w-full min-w-0'}>
+      <div className="w-full min-w-0">
+        <div className="w-full min-w-0">
           {/* Compact label strip */}
           <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
             <h3 className="text-sm font-semibold text-gray-800">{prompt.name}</h3>
-            <div
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: prompt.color }}
-            />
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 whitespace-nowrap">
+                {displayTokens.length} tokens &times;{' '}
+                {displayLayers.length === allLayers.length
+                  ? allLayers.length
+                  : `${displayLayers.length} of ${allLayers.length}`}{' '}
+                layers
+              </span>
+              <div
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: prompt.color }}
+              />
+            </div>
           </div>
 
           <div className="flex min-w-0 w-full">
@@ -749,7 +754,7 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                   </>
                 );
               })()}
-              {/* X-axis title (top) — scrolls with content, not sticky */}
+              {/* X-axis title — scrolls with content, not sticky */}
               <div className="flex items-center mb-1">
                 <div className="shrink-0" style={{ width: tokenColWidth }} />
                 <div
@@ -960,7 +965,10 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                                   isHighlighted={isHighlight}
                                   isSelected={isSelected}
                                   onCellClick={onCellClick}
-                                  animationDelay={0}
+                                  isIntervention={isIntervention}
+                                  isTainted={isTainted}
+                                  taintColor={blendColor}
+                                  animationDelay={animationDelay}
                                   onHighlightRefChange={onHighlightRefChange}
                                   width={cellWidth}
                                   height={cellHeight}
@@ -1274,60 +1282,6 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
                 );
               })}
 
-              {/* Bottom (non-sticky) layer-number row */}
-              <div
-                className="flex items-center mt-2"
-                style={{ borderTop: '1px solid #e5e7eb' }}
-              >
-                {/* Bottom-left corner spacer: sticky-left to match column */}
-                <div
-                  className="shrink-0"
-                  style={{
-                    width: tokenColWidth,
-                    height: Math.max(24, cellHeight * 0.6),
-                    position: 'sticky',
-                    left: 0,
-                    zIndex: 1,
-                    ...stickyLeftShadow,
-                  }}
-                />
-                {displayLayers.map((layerValue, idx) => (
-                  <div key={`bottom-${layerValue}`} className="flex items-center">
-                    <div
-                      className="text-center font-bold text-gray-800"
-                      style={{
-                        width: cellWidth,
-                        height: Math.max(24, cellHeight * 0.6),
-                        fontSize: labelFontSize,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      {layerValue}
-                    </div>
-                    {idx < displayLayers.length - 1 && (
-                      <div style={{ width: horizArrowWidth, height: Math.max(24, cellHeight * 0.6) }} />
-                    )}
-                  </div>
-                ))}
-              </div>
-              {/* X-axis title (bottom) */}
-              <div className="flex items-center mt-1">
-                <div className="shrink-0" style={{ width: tokenColWidth }} />
-                <div
-                  style={{
-                    flex: 1,
-                    textAlign: 'center',
-                    fontSize: axisTitleFontSize,
-                    fontWeight: 600,
-                    color: '#4b5563',
-                  }}
-                >
-                  Layer (Step: {layerStep})
-                </div>
-              </div>
-
             </div>
           </div>
           </div>
@@ -1358,6 +1312,14 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             <span style={{ fontSize: 10, color: '#6b7280' }}>1.0</span>
           </div>
 
+          {isResult && interventionCell && (
+            <div className="flex items-center px-4 pb-3" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, fontWeight: 500, color: '#374151' }}>Patch</span>
+              <PatchSwatch color={interventionCell.sourceColor} label="patched cell" />
+              <PatchSwatch color={blendColor || prompt.color} label="downstream of the patch" />
+            </div>
+          )}
+
           {/* Whitespace key — only the marks currently on screen. Wraps rather
               than squeezing the probability scale on a narrow card. */}
           {hasWhitespaceGlyphs && (
@@ -1379,14 +1341,27 @@ export const HeatmapGrid: React.FC<HeatmapGridProps> = ({
             </div>
           )}
         </div>
-
-        {showSidebar && (
-          <div className="bg-gray-100 p-4 flex-shrink-0 w-80">{sidebarContent}</div>
-        )}
       </div>
     </div>
   );
 };
+
+/** One entry of the patched grid's color key. */
+const PatchSwatch: React.FC<{ color: string; label: string }> = ({ color, label }) => (
+  <span
+    style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+      fontSize: 10,
+      color: '#6b7280',
+      whiteSpace: 'nowrap',
+    }}
+  >
+    <span style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: color }} />
+    {label}
+  </span>
+);
 
 /** One entry of the whitespace key: the glyph as the grid draws it, then its name. */
 const GlyphKey: React.FC<{ glyph: string; label: string }> = ({ glyph, label }) => (
@@ -1418,6 +1393,9 @@ interface DropTargetCellProps {
   isHighlighted?: boolean;
   isSelected?: boolean;
   onCellClick?: (tokenPosition: number, layer: number) => void;
+  isIntervention?: boolean;
+  isTainted?: boolean;
+  taintColor?: string;
   animationDelay?: number;
   onHighlightRefChange?: (ref: HTMLElement | null) => void;
   width: number;
@@ -1437,6 +1415,9 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
   isHighlighted,
   isSelected,
   onCellClick,
+  isIntervention,
+  isTainted,
+  taintColor,
   animationDelay,
   onHighlightRefChange,
   width,
@@ -1481,6 +1462,9 @@ const DropTargetCell: React.FC<DropTargetCellProps> = ({
           isSelected={isSelected}
           isHighlighted={isHighlighted}
           onClick={() => onCellClick?.(tokenPosition, layer)}
+          isIntervention={isIntervention}
+          isTainted={isTainted}
+          taintColor={taintColor}
           animationDelay={animationDelay}
           highlightRef={isHighlighted ? onHighlightRefChange : undefined}
           width={width}

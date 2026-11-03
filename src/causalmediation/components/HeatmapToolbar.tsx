@@ -65,9 +65,10 @@ interface HeatmapToolbarProps {
   onZoomChange: (zoom: number) => void;
   layerStep: number;
   onLayerStepChange: (step: number) => void;
-  summary?: string;
   syncScroll?: boolean;
   onSyncScrollChange?: (value: boolean) => void;
+  // Right-hand side of the row, e.g. the patch controls.
+  children?: React.ReactNode;
 }
 
 export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
@@ -75,9 +76,9 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
   onZoomChange,
   layerStep,
   onLayerStepChange,
-  summary,
   syncScroll,
   onSyncScrollChange,
+  children,
 }) => {
   const handleZoomIn = () => {
     onZoomChange(Math.min(200, zoom + 10));
@@ -92,12 +93,11 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
   };
 
   return (
-    <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-200">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2 bg-gray-50 border-b border-gray-200">
       {/* Left side: Zoom and Step controls */}
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-4">
         {/* Zoom controls */}
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-gray-700">Zoom:</span>
           <button
             onClick={handleZoomOut}
             className="p-1 hover:bg-gray-200 rounded transition-colors"
@@ -127,7 +127,7 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
         {/* Layer Step controls (token rows are always shown, so there is no
             token-step control — only layers get downsampled for wide models). */}
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-gray-700">Layer Step:</span>
+          <span className="text-sm font-medium text-gray-700 whitespace-nowrap">Layer Step:</span>
           <input
             type="number"
             min="1"
@@ -148,15 +148,12 @@ export const HeatmapToolbar: React.FC<HeatmapToolbarProps> = ({
               onChange={(e) => onSyncScrollChange(e.target.checked)}
               className="cursor-pointer"
             />
-            <span className="text-sm font-medium text-gray-700">Sync scroll</span>
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap">Sync scroll</span>
           </label>
         )}
       </div>
 
-      {/* Right side: Info display */}
-      {summary && (
-        <div className="text-sm text-gray-600">{summary}</div>
-      )}
+      {children}
     </div>
   );
 };

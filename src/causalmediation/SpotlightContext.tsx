@@ -4,7 +4,8 @@ import { createContext, useContext, useMemo, useState, type ReactNode } from 're
  * A cell the host app can spotlight inside the explorer — used by guided
  * tutorials to point at the exact cell to patch from ("Show me"). `'last'`
  * resolves at render time to the final layer / last token position, so callers
- * don't hard-code a model's layer count.
+ * don't hard-code a model's layer count. `'result'` addresses the target grid
+ * while it shows the patched run, and resolves to nothing otherwise.
  */
 export type CellSpotlight = {
   grid: 'source' | 'target' | 'result';
