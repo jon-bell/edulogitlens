@@ -4,15 +4,12 @@ import { HTML5Backend } from 'react-dnd-html5-backend';
 import { HeatmapGrid } from './components/HeatmapGrid';
 import { HeatmapToolbar } from './components/HeatmapToolbar';
 import { TokenPredictionPanel } from './components/TokenPredictionPanel';
-import { ResultSidebar } from './components/ResultSidebar';
 import { CurvedPatchArrow } from './components/CurvedPatchArrow';
+import { PatchControls } from './components/PatchControls';
 import { PromptInput, Intervention, SelectedCell, CausalMediationEvent } from './types';
-import { formatTokenDisplay } from './utils/formatToken';
 import { useSpotlight } from './SpotlightContext';
 import type { LogitLensData } from '../LogitLensGrid';
 import { createMockLogitLensData, generateInterventionResult } from './utils/mockData';
-import { motion, AnimatePresence } from 'motion/react';
-import { RotateCcw, Loader2 } from 'lucide-react';
 
 /**
  * Central color theme — change colors here to update the entire explorer.
@@ -43,7 +40,7 @@ interface CausalMediationExplorerProps {
   // no token text. Purely observational — does not affect widget behavior.
   onEvent?: (event: CausalMediationEvent) => void;
   // Optional: reports the target's post-patch top predicted token — the
-  // last-position, final-layer output shown in the result grid — whenever a
+  // last-position, final-layer output of the patched run — whenever a patch
   // result becomes available (live drop or restored/controlled resultData), and
   // again if a re-patch changes it. Deliberately separate from `onEvent`: this
   // carries the model's predicted token (never participant text), for a host
@@ -93,7 +90,7 @@ export function CausalMediationExplorer({
   const [internalIntervention, setInternalIntervention] = useState<Intervention | null>(null);
   const [internalResultData, setInternalResultData] = useState<LogitLensData | null>(null);
   const [selectedCell, setSelectedCell] = useState<SelectedCell | null>(null);
-  const [resultSelectedCell, setResultSelectedCell] = useState<SelectedCell | null>(null);
+  const [showPatched, setShowPatched] = useState(true);
   const [sourceHighlightRef, setSourceHighlightRef] = useState<HTMLElement | null>(null);
   const [targetHighlightRef, setTargetHighlightRef] = useState<HTMLElement | null>(null);
 
@@ -134,8 +131,27 @@ export function CausalMediationExplorer({
   // source of truth (restored/revisited patch); undefined falls back to the
   // internal drag state. A live drag sets the internal state first (instant),
   // then the parent persists + re-supplies the identical spec via the prop.
+  // While a drag's patch computes, that drag's spec wins: a controlling parent
+  // still holds the previous patch until the new one is persisted.
   const isInterventionControlled = controlledIntervention !== undefined;
-  const intervention = isInterventionControlled ? controlledIntervention : internalIntervention;
+  const intervention =
+    isInterventionPending && internalIntervention
+      ? internalIntervention
+      : isInterventionControlled
+        ? controlledIntervention
+        : internalIntervention;
+
+  // The patched run is drawn on the target grid in place of the original one.
+  // Held back while a patch computes: `resultData` may still be the last patch's.
+  const patchedData = intervention && resultData && !isInterventionPending ? resultData : null;
+  const isShowingPatched = !!patchedData && showPatched;
+  const targetView = useMemo<PromptInput>(
+    () =>
+      isShowingPatched && patchedData
+        ? { ...targetPrompt, name: 'Target Prompt (patched)', data: patchedData }
+        : targetPrompt,
+    [isShowingPatched, patchedData, targetPrompt],
+  );
 
   // Shared toolbar state — both grids share zoom, tokenStep, layerStep.
   const [zoom, setZoom] = useState(100);
@@ -190,11 +206,15 @@ export function CausalMediationExplorer({
         .filter((i) => i >= 0);
     return [
       idxsFor('source', sourcePrompt.data),
-      isSinglePromptMode ? [] : idxsFor('target', targetPrompt.data),
-      resultData ? idxsFor('result', resultData) : [],
+      isSinglePromptMode
+        ? []
+        : [
+            ...idxsFor('target', targetView.data),
+            ...(isShowingPatched ? idxsFor('result', targetView.data) : []),
+          ],
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spotlights, sourcePrompt.data, targetPrompt.data, resultData, isSinglePromptMode]);
+  }, [spotlights, sourcePrompt.data, targetView.data, isShowingPatched, isSinglePromptMode]);
 
   // Cell footprint constants mirror HeatmapGrid's BASE_* values. The two grids
   // sit side by side, so each gets ~half the wrapper width (minus the inter-grid
@@ -228,13 +248,13 @@ export function CausalMediationExplorer({
     // spans each grid's scroll container (capped at 82vh) PLUS the probability
     // legend, which sits inside gridsRef. The non-row chrome is, at zoom 100:
     //   top:    pt-4 (16) + X-axis title (~19) + sticky layer header (~37) ≈ 72
-    //   bottom: layer-number row (~29) + bottom axis title (~23) + pb-4 (16) ≈ 68
+    //   bottom: pb-4 (16)
     //   legend: ~30 (below the scroll container, inside the card)
     // The old code folded all of this into `padding = 40`, badly undercounting
     // it — so auto-fit thought more rows fit than the 82vh container could show
     // and clipped the final row (bug B1). Rounded up slightly for slack so the
     // last row never clips at the cost of occasionally one fewer row.
-    const vChrome = 180;
+    const vChrome = 130;
 
     // In single-prompt mode only ONE grid renders, so it gets the full wrapper
     // width — don't halve it. Halving here was the bug that capped a lone grid
@@ -318,12 +338,6 @@ export function CausalMediationExplorer({
     onEvent?.({ type: 'layer_step_change', step });
   };
 
-  const sourceVisibleTokens = countVisible(sourcePrompt.data.tokens.length, tokenStep);
-  const sourceVisibleLayers = countVisible(sourcePrompt.data.layers.length, layerStep);
-  const targetVisibleTokens = countVisible(targetPrompt.data.tokens.length, tokenStep);
-  const targetVisibleLayers = countVisible(targetPrompt.data.layers.length, layerStep);
-  const toolbarSummary = `Source: ${sourceVisibleTokens} tok × ${sourceVisibleLayers} layers | Target: ${targetVisibleTokens} tok × ${targetVisibleLayers} layers`;
-
   // Reset intervention/selection state only when the *content* of the prompts
   // actually changes (user edited the prompt text). Keying on the object
   // identity of `sourcePrompt`/`targetPrompt` would make this effect fire on
@@ -339,8 +353,13 @@ export function CausalMediationExplorer({
     setInternalIntervention(null);
     setInternalResultData(null);
     setSelectedCell(null);
-    setResultSelectedCell(null);
   }, [promptsKey]);
+
+  // Every new patch opens on its patched view.
+  const interventionKey = JSON.stringify(intervention ?? null);
+  useEffect(() => {
+    setShowPatched(true);
+  }, [interventionKey]);
 
   const handleDrop = (item: any, targetTokenPos: number, targetLayer: number) => {
     const newIntervention: Intervention = {
@@ -388,7 +407,6 @@ export function CausalMediationExplorer({
     onResetIntervention?.();
     setInternalResultData(null);
     setSelectedCell(null);
-    setResultSelectedCell(null);
   };
 
   // Reference tokens for the top-k lists' "final prediction" markers: the
@@ -403,16 +421,12 @@ export function CausalMediationExplorer({
   };
 
   const handleCellClick = (promptId: string, tokenPosition: number, layer: number) => {
-    let data: LogitLensData | null = null;
-
-    if (promptId === sourcePrompt.id) {
-      data = sourcePrompt.data;
-    } else if (promptId === targetPrompt.id) {
-      data = targetPrompt.data;
-    } else if (promptId === 'result' && resultData) {
-      data = resultData;
-    }
-
+    const data =
+      promptId === sourcePrompt.id
+        ? sourcePrompt.data
+        : promptId === targetPrompt.id
+          ? targetView.data
+          : null;
     if (!data) return;
     const layerIdx = data.layers.indexOf(layer);
     const cell = data.data[tokenPosition]?.[layerIdx];
@@ -425,130 +439,59 @@ export function CausalMediationExplorer({
       promptId,
       ...finalTokensFor(data, tokenPosition),
     });
-    onEvent?.({ type: 'cell_click', promptId, tokenPosition, layer });
+    onEvent?.(
+      promptId === targetPrompt.id && isShowingPatched
+        ? { type: 'result_cell_click', tokenPosition, layer }
+        : { type: 'cell_click', promptId, tokenPosition, layer },
+    );
   };
 
-  const handleResultCellClick = (tokenPosition: number, layer: number) => {
-    if (!resultData) return;
-    const layerIdx = resultData.layers.indexOf(layer);
-    const cell = resultData.data[tokenPosition]?.[layerIdx];
-    if (!cell) return;
-
-    setResultSelectedCell({
-      tokenPosition,
-      layer,
+  // A target selection follows the patched/original switch, so its top-k list
+  // always matches the run the target grid is showing.
+  const shownSelectedCell = useMemo<SelectedCell | null>(() => {
+    if (!selectedCell || selectedCell.promptId !== targetPrompt.id) return selectedCell;
+    const data = targetView.data;
+    const cell = data.data[selectedCell.tokenPosition]?.[data.layers.indexOf(selectedCell.layer)];
+    if (!cell) return null;
+    return {
+      ...selectedCell,
       topTokens: cell.topTokens,
-      promptId: 'result',
-      ...finalTokensFor(resultData, tokenPosition),
-    });
-    onEvent?.({ type: 'result_cell_click', tokenPosition, layer });
-  };
-
-  // Auto-select last token / last layer of the result prompt
-  useEffect(() => {
-    if (!resultData) return;
-    const lastTokenIdx = resultData.data.length - 1;
-    const lastLayer = resultData.layers[resultData.layers.length - 1];
-    const lastLayerIdx = resultData.layers.length - 1;
-    const lastCell = resultData.data[lastTokenIdx]?.[lastLayerIdx];
-    if (lastCell) {
-      setResultSelectedCell({
-        tokenPosition: lastTokenIdx,
-        layer: lastLayer,
-        topTokens: lastCell.topTokens,
-        promptId: 'result',
-        rowFinalToken: lastCell.token,
-        gridFinalToken: lastCell.token,
-      });
-    }
-  }, [resultData]);
+      ...finalTokensFor(data, selectedCell.tokenPosition),
+    };
+  }, [selectedCell, targetPrompt.id, targetView.data]);
 
   // Report the post-patch output token to a host scoring an activity against
   // the patch. Emit on every distinct grid-final token (last position, final
   // layer) — covers the null->result transition and a re-patch that changes the
   // outcome without an intervening reset; skips duplicate emits for the same
   // token, and clears the memo on reset so an identical token re-emits later.
+  // Tracks the patch, not the switch: viewing the original run keeps the patch.
   const lastEmittedResultTokenRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!resultData) {
+    if (!patchedData) {
       // Report the disappearance, not just the arrival. A host that announces the
       // patch outcome ("the target now predicts X") has no other way to learn the
-      // patched grid is gone — e.g. a fresh lens run replaces the patched run as
-      // the active one — and would keep describing a result no longer on screen.
+      // patch is gone — e.g. it was discarded, or a fresh lens run replaced the
+      // patched run as the active one — and would keep describing a stale result.
       if (lastEmittedResultTokenRef.current !== null) onInterventionResult?.(null);
       lastEmittedResultTokenRef.current = null;
       return;
     }
-    const lastTokenIdx = resultData.data.length - 1;
-    const lastLayerIdx = resultData.layers.length - 1;
-    const token = resultData.data[lastTokenIdx]?.[lastLayerIdx]?.token ?? null;
+    const lastTokenIdx = patchedData.data.length - 1;
+    const lastLayerIdx = patchedData.layers.length - 1;
+    const token = patchedData.data[lastTokenIdx]?.[lastLayerIdx]?.token ?? null;
     if (token !== lastEmittedResultTokenRef.current) {
       lastEmittedResultTokenRef.current = token;
       onInterventionResult?.(token);
     }
-  }, [resultData, onInterventionResult]);
+  }, [patchedData, onInterventionResult]);
 
-  // Once the intervention result is ready, bring it into view — it mounts
-  // below the two source/target grids, past the fold, and pilot users didn't
-  // notice it appear. Only queued on the null -> data transition so manual
-  // scrolling afterwards isn't hijacked by refetches.
-  const resultContainerRef = useRef<HTMLDivElement>(null);
-  const pendingResultScrollRef = useRef(false);
-  const hadResultRef = useRef(false);
-  useEffect(() => {
-    const hasResult = !!resultData;
-    if (hasResult && !hadResultRef.current) pendingResultScrollRef.current = true;
-    hadResultRef.current = hasResult;
-  }, [resultData]);
-
-  // Fire the queued scroll only after layout has settled. On a restored patch
-  // the result exists at MOUNT, when auto-fit hasn't measured the wrapper or
-  // applied its derived steps yet — scrolling then lands on a position that
-  // the following relayout invalidates. Waiting until the applied steps match
-  // the auto-fit target (or auto-fit is off) scrolls to the final geometry.
-  // A live drag has settled layout already, so it scrolls immediately.
-  const stepsSettled =
-    !autoFit ||
-    (!!gridsSize && tokenStep === autoStep.tokenStep && layerStep === autoStep.layerStep);
-  useEffect(() => {
-    if (!pendingResultScrollRef.current || !resultData || !stepsSettled) return;
-    pendingResultScrollRef.current = false;
-    requestAnimationFrame(() => {
-      resultContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  }, [resultData, stepsSettled]);
-
-  // Bring the LOADING state into view too, not just the finished result. An
-  // intervention takes tens of seconds, and its spinner sits below the two grids,
-  // past the fold — the same place the result was that pilot users didn't notice.
-  // Scrolling only on completion means the whole wait happens off screen, so the
-  // drag reads as having done nothing and gets retried on top of the request
-  // already in flight. Fires on the transition into pending, so it can't fight
-  // manual scrolling during the wait.
-  const pendingRef = useRef<HTMLDivElement>(null);
-  const isPendingVisible = isInterventionPending && !!intervention && !resultData;
-  const wasPendingRef = useRef(false);
-  useEffect(() => {
-    if (isPendingVisible && !wasPendingRef.current) {
-      requestAnimationFrame(() => {
-        pendingRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    }
-    wasPendingRef.current = isPendingVisible;
-  }, [isPendingVisible]);
-
-  const resultPromptInput = useMemo<PromptInput | null>(
-    () =>
-      resultData
-        ? {
-            id: 'result',
-            name: 'Result (Intervened)',
-            color: targetPrompt.color,
-            data: resultData,
-          }
-        : null,
-    [resultData, targetPrompt.color],
-  );
+  const targetSpotlights = isSinglePromptMode
+    ? []
+    : [
+        ...resolveSpotlights('target', targetView.data),
+        ...(isShowingPatched ? resolveSpotlights('result', targetView.data) : []),
+      ];
 
   return (
     <DndProvider backend={HTML5Backend}>
@@ -561,10 +504,32 @@ export function CausalMediationExplorer({
               onZoomChange={setZoom}
               layerStep={layerStep}
               onLayerStepChange={handleLayerStepChange}
-              summary={toolbarSummary}
               syncScroll={syncScroll}
               onSyncScrollChange={setSyncScroll}
-            />
+            >
+              <PatchControls
+                isSinglePromptMode={isSinglePromptMode}
+                intervention={intervention}
+                sourceToken={
+                  intervention
+                    ? sourcePrompt.data.tokens[intervention.sourceTokenPosition] ?? ''
+                    : ''
+                }
+                targetToken={
+                  intervention
+                    ? targetPrompt.data.tokens[intervention.targetTokenPosition] ?? ''
+                    : ''
+                }
+                sourceColor={sourcePrompt.color}
+                targetColor={targetPrompt.color}
+                blendColor={THEME.blendColor}
+                isPending={isInterventionPending && !!intervention}
+                hasResult={!!patchedData}
+                showPatched={showPatched}
+                onShowPatchedChange={setShowPatched}
+                onDiscard={handleReset}
+              />
+            </HeatmapToolbar>
           </div>
 
           {/* Side-by-side prompts (single column when in single-prompt mode). */}
@@ -593,7 +558,7 @@ export function CausalMediationExplorer({
                     : undefined
                 }
                 spotlightCells={resolveSpotlights('source', sourcePrompt.data)}
-                selectedCell={selectedCell}
+                selectedCell={shownSelectedCell}
                 onCellClick={(tokenPos, layer) =>
                   handleCellClick(sourcePrompt.id, tokenPos, layer)
                 }
@@ -607,7 +572,7 @@ export function CausalMediationExplorer({
             {!isSinglePromptMode && (
             <div className="min-w-0 w-full">
               <HeatmapGrid
-                prompt={targetPrompt}
+                prompt={targetView}
                 zoom={zoom}
                 tokenStep={tokenStep}
                 layerStep={layerStep}
@@ -621,8 +586,19 @@ export function CausalMediationExplorer({
                       }
                     : undefined
                 }
-                spotlightCells={resolveSpotlights('target', targetPrompt.data)}
-                selectedCell={selectedCell}
+                isResult={isShowingPatched}
+                blendColor={THEME.blendColor}
+                interventionCell={
+                  isShowingPatched && intervention
+                    ? {
+                        tokenPosition: intervention.targetTokenPosition,
+                        layer: intervention.targetLayer,
+                        sourceColor: sourcePrompt.color,
+                      }
+                    : undefined
+                }
+                spotlightCells={targetSpotlights}
+                selectedCell={shownSelectedCell}
                 onCellClick={(tokenPos, layer) =>
                   handleCellClick(targetPrompt.id, tokenPos, layer)
                 }
@@ -643,198 +619,15 @@ export function CausalMediationExplorer({
               blendedColor={THEME.blendColor}
             />
           )}
-
-          <AnimatePresence>
-            {resultPromptInput && intervention && (
-              <motion.div
-                ref={resultContainerRef}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                transition={{ duration: 0.5 }}
-                className="relative mt-8 min-w-0"
-              >
-                <div className="pt-4 flex flex-col items-center gap-3">
-                  <button
-                    onClick={handleReset}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      backgroundColor: '#1f2937',
-                      color: '#ffffff',
-                      padding: '6px 14px',
-                      borderRadius: '9999px',
-                      border: '1px solid rgba(0,0,0,0.1)',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-                      fontSize: '14px',
-                      fontWeight: 500,
-                      cursor: 'pointer',
-                      transition: 'background-color 150ms, box-shadow 150ms',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = '#374151';
-                      e.currentTarget.style.boxShadow = '0 3px 6px rgba(0,0,0,0.2)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = '#1f2937';
-                      e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.15)';
-                    }}
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    Reset Intervention
-                  </button>
-
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                    }}
-                  >
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        padding: '4px 12px',
-                        borderRadius: '9999px',
-                        backgroundColor: sourcePrompt.color,
-                        color: '#ffffff',
-                        fontSize: '14px',
-                        fontWeight: 500,
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: '50%',
-                          backgroundColor: '#ffffff',
-                        }}
-                      />
-                      [{formatTokenDisplay(sourcePrompt.data.tokens[intervention.sourceTokenPosition] ?? '')}, Layer {intervention.sourceLayer}]
-                    </span>
-                    <span style={{ fontSize: 18, color: '#6b7280' }}>&rarr;</span>
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        padding: '4px 12px',
-                        borderRadius: '9999px',
-                        backgroundColor: targetPrompt.color,
-                        color: '#ffffff',
-                        fontSize: '14px',
-                        fontWeight: 500,
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: '50%',
-                          backgroundColor: '#ffffff',
-                        }}
-                      />
-                      [{formatTokenDisplay(targetPrompt.data.tokens[intervention.targetTokenPosition] ?? '')}, Layer {intervention.targetLayer}]
-                    </span>
-                  </div>
-
-                  <div className="w-full">
-                    <HeatmapGrid
-                      prompt={resultPromptInput}
-                      zoom={zoom}
-                      tokenStep={tokenStep}
-                      layerStep={layerStep}
-                      highlightCell={{
-                        tokenPosition: intervention.targetTokenPosition,
-                        layer: intervention.targetLayer,
-                      }}
-                      spotlightCells={resolveSpotlights('result', resultPromptInput.data)}
-                      selectedCell={resultSelectedCell}
-                      onCellClick={handleResultCellClick}
-                      isResult={true}
-                      blendColor={THEME.blendColor}
-                      interventionCell={{
-                        tokenPosition: intervention.targetTokenPosition,
-                        layer: intervention.targetLayer,
-                        sourceColor: sourcePrompt.color,
-                      }}
-                      showSidebar={true}
-                      sidebarContent={<ResultSidebar selectedCell={resultSelectedCell} />}
-                    />
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Loading state: parent is running a backend call for the intervention. */}
-          {isPendingVisible && (
-            <motion.div
-              ref={pendingRef}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.3 }}
-              className="mt-8 flex items-center justify-center py-12 border-2 border-dashed border-gray-300 rounded-xl bg-white/50"
-              role="status"
-              aria-live="polite"
-            >
-              {/* An intervention is a second forward pass with a hook, so it is
-                  routinely slower than the plain lens run that preceded it. Without
-                  a duration cue the wait reads as a hang, and the drag gets retried
-                  on top of the request already in flight. */}
-              <div className="flex flex-col items-center gap-3 text-gray-500">
-                <Loader2 className="w-6 h-6 animate-spin" />
-                <div className="flex flex-col items-center gap-1">
-                  <p className="text-sm">Computing intervention&hellip;</p>
-                  <p className="text-xs text-gray-400">
-                    This usually takes 30&ndash;40 seconds &mdash; hang tight.
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {!isSinglePromptMode && !resultPromptInput && !(isInterventionPending && intervention) && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-center text-gray-500 py-3 border-2 border-dashed border-gray-300 rounded-xl bg-white/50"
-            >
-              <p className="text-sm">
-                Drag a cell from the{' '}
-                <strong style={{ color: sourcePrompt.color }}>Source Prompt</strong> onto a cell in the{' '}
-                <strong style={{ color: targetPrompt.color }}>Target Prompt</strong>, or click any cell to view its top token predictions.
-              </p>
-            </motion.div>
-          )}
-          {isSinglePromptMode && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-center text-gray-500 py-3 border-2 border-dashed border-gray-300 rounded-xl bg-white/50"
-            >
-              <p className="text-sm">
-                Click any cell to view its top token predictions. Add a target
-                prompt above to enable drag-and-drop patching.
-              </p>
-            </motion.div>
-          )}
         </div>
 
         <TokenPredictionPanel
-          selectedCell={selectedCell}
+          selectedCell={shownSelectedCell}
           onClose={() => setSelectedCell(null)}
           highlightColor={
-            selectedCell?.promptId === targetPrompt.id
+            shownSelectedCell?.promptId === targetPrompt.id
               ? targetPrompt.color
-              : selectedCell?.promptId === 'result'
-                ? targetPrompt.color
-                : sourcePrompt.color
+              : sourcePrompt.color
           }
         />
       </div>
